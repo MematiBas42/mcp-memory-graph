@@ -168,7 +168,8 @@ export const API_KEYS_DDL = `
  * {@link assertDimensionConsistency}.
  */
 export function configuredDimensions(): number {
-  const raw = process.env.MCP_MEMORY_DIMENSIONS ?? '384';
+  const defaultDim = process.env.MCP_MEMORY_PROVIDER === 'ollama' ? '768' : '384';
+  const raw = process.env.MCP_MEMORY_DIMENSIONS ?? defaultDim;
   const parsed = parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 8192) {
     throw new Error(
@@ -561,7 +562,9 @@ export function initializeSchema(db: Database.Database): void {
  * actually loaded the default model, bricking a healthy DB on next restart. */
 export function configuredModelName(): string {
   const m = process.env.MCP_MEMORY_MODEL;
-  return m && m.trim() ? m : DEFAULT_EMBEDDING_MODEL;
+  if (m && m.trim()) return m;
+  if (process.env.MCP_MEMORY_PROVIDER === 'ollama') return 'nomic-embed-text';
+  return DEFAULT_EMBEDDING_MODEL;
 }
 
 /**
