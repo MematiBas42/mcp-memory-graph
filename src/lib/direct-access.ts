@@ -82,7 +82,8 @@ export function getEmbedder(): Promise<EmbeddingProvider> {
   if (!embedderPromise) {
     /* c8 ignore start */
     embedderPromise = (async () => {
-      if (process.env.MCP_MEMORY_PROVIDER === 'ollama') {
+      const isOllama = process.env.MCP_MEMORY_PROVIDER?.trim().toLowerCase() === 'ollama';
+      if (isOllama) {
         const { OllamaEmbeddingProvider } = await import('../embeddings/ollama.js');
         const inner = new OllamaEmbeddingProvider({
           model: configuredModelName(),
