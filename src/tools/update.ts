@@ -47,6 +47,15 @@ export async function handleUpdate(
   if (input.importance_score !== undefined) {
     updates.importance_score = input.importance_score;
   }
+  if (input.scope !== undefined) {
+    updates.scope = input.scope;
+  }
+  if (input.namespace !== undefined) {
+    updates.namespace = input.namespace;
+  }
+  if (input.document_type !== undefined) {
+    updates.document_type = input.document_type;
+  }
   // v19 trust-surfacing. verification_tier/detail are the main post-hoc edit
   // (you verify a stored claim against live state later).
   if (input.verification_tier !== undefined) {

@@ -7,16 +7,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-} from "@/components/ui/dialog"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
-import { ArrowLeft, Pencil, Trash2, Clock, GitBranch } from "lucide-react"
+import { ArrowLeft, Pencil, Trash2, Clock, GitBranch, Check, X } from "lucide-react"
 import { toast } from "sonner"
 import { getMemory, getVersions, getRelated, updateMemory, deleteMemory } from "@/api/client"
 import type { Memory, VersionRecord, SearchResult } from "@/types"
@@ -30,11 +29,27 @@ export function MemoryDetail() {
   const [related, setRelated] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Edit state
-  const [editOpen, setEditOpen] = useState(false)
+  // Inline Edit state
+  const [isEditing, setIsEditing] = useState(false)
   const [editTitle, setEditTitle] = useState("")
   const [editContent, setEditContent] = useState("")
+  const [editScope, setEditScope] = useState<Memory["scope"]>("project")
+  const [editNamespace, setEditNamespace] = useState("")
+  const [editDocType, setEditDocType] = useState("")
+  const [editTags, setEditTags] = useState("")
+  const [editImportance, setEditImportance] = useState("0.5")
   const [saving, setSaving] = useState(false)
+  const [activeTab, setActiveTab] = useState("content")
+
+  const initEditState = (m: Memory) => {
+    setEditTitle(m.title ?? "")
+    setEditContent(m.content)
+    setEditScope(m.scope)
+    setEditNamespace(m.namespace ?? "")
+    setEditDocType(m.document_type ?? "")
+    setEditTags(m.tags?.join(", ") ?? "")
+    setEditImportance(String(m.importance_score ?? 0.5))
+  }
 
   useEffect(() => {
     if (!id) return
@@ -46,6 +61,7 @@ export function MemoryDetail() {
     ])
       .then(([memData, verData, relData]) => {
         setMemory(memData.memory)
+        initEditState(memData.memory)
         setVersions(verData.history)
         setCurrentVersion(verData.current_version)
         setRelated(relData.related)
@@ -53,17 +69,48 @@ export function MemoryDetail() {
       .finally(() => setLoading(false))
   }, [id])
 
-  const handleEdit = async () => {
+  const startEditing = () => {
+    if (memory) {
+      initEditState(memory)
+      setIsEditing(true)
+      setActiveTab("content")
+    }
+  }
+
+  const cancelEditing = () => {
+    if (memory) {
+      initEditState(memory)
+    }
+    setIsEditing(false)
+  }
+
+  const handleSave = async () => {
     if (!id) return
     setSaving(true)
     try {
+      const parsedTags = editTags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+      const parsedImp = Number.parseFloat(editImportance)
+
       const result = await updateMemory(id, {
-        title: editTitle || undefined,
+        title: editTitle.trim() || undefined,
         content: editContent,
+        scope: editScope,
+        namespace: editNamespace.trim() || null,
+        document_type: editDocType.trim() || null,
+        tags: parsedTags,
+        importance_score: isNaN(parsedImp) ? undefined : Math.min(1, Math.max(0, parsedImp)),
       })
       setMemory(result.memory)
-      setEditOpen(false)
-      toast.success("Memory updated")
+      initEditState(result.memory)
+      setIsEditing(false)
+      // refresh version history
+      const verData = await getVersions(id)
+      setVersions(verData.history)
+      setCurrentVersion(verData.current_version)
+      toast.success("Memory updated successfully")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Update failed")
     } finally {
@@ -124,53 +171,36 @@ export function MemoryDetail() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Dialog open={editOpen} onOpenChange={setEditOpen}>
-            <DialogTrigger
-              render={<Button variant="outline" size="sm" />}
-              onClick={() => {
-                setEditTitle(memory.title ?? "")
-                setEditContent(memory.content)
-              }}
-            >
+          {isEditing ? (
+            <>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                <Check className="mr-1 h-4 w-4" />
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={cancelEditing} disabled={saving}>
+                <X className="mr-1 h-4 w-4" />
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" size="sm" onClick={startEditing}>
               <Pencil className="mr-1 h-4 w-4" />
               Edit
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>Edit Memory</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <Input
-                  placeholder="Title"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                />
-                <Textarea
-                  placeholder="Content"
-                  className="min-h-[200px] font-mono text-sm"
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                />
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
-                <Button onClick={handleEdit} disabled={saving}>
-                  {saving ? "Saving..." : "Save"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Button variant="destructive" size="sm" onClick={handleDelete}>
+            </Button>
+          )}
+          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={isEditing || saving}>
             <Trash2 className="mr-1 h-4 w-4" />
             Delete
           </Button>
         </div>
       </div>
 
-      {/* Tabs: Content | Versions | Related */}
-      <Tabs defaultValue="content">
+      {/* Tabs: Content | Versions | Related | Metadata */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v ?? "content")}>
         <TabsList>
-          <TabsTrigger value="content">Content</TabsTrigger>
+          <TabsTrigger value="content">
+            {isEditing ? "Content (Editing)" : "Content"}
+          </TabsTrigger>
           <TabsTrigger value="versions">
             <Clock className="mr-1 h-4 w-4" />
             Versions ({versions.length})
@@ -185,9 +215,106 @@ export function MemoryDetail() {
         <TabsContent value="content" className="mt-4">
           <Card>
             <CardContent className="p-6">
-              <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
-                {memory.content}
-              </pre>
+              {isEditing ? (
+                <div className="space-y-4">
+                  {/* Compact Field Bar */}
+                  <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Title</label>
+                        <Input
+                          placeholder="Memory Title"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="microlabel text-[11px]">Scope</label>
+                          <Select value={editScope} onValueChange={(v) => v && setEditScope(v as Memory["scope"])}>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Scope" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="global">global</SelectItem>
+                              <SelectItem value="project">project</SelectItem>
+                              <SelectItem value="user">user</SelectItem>
+                              <SelectItem value="team">team</SelectItem>
+                              <SelectItem value="department">department</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="microlabel text-[11px]">Namespace</label>
+                          <Input
+                            placeholder="e.g. hyprland, nitro"
+                            value={editNamespace}
+                            onChange={(e) => setEditNamespace(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Document Type</label>
+                        <Input
+                          placeholder="e.g. decision, lesson, code"
+                          value={editDocType}
+                          onChange={(e) => setEditDocType(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Tags (comma-separated)</label>
+                        <Input
+                          placeholder="e.g. arch, hyprland, ui"
+                          value={editTags}
+                          onChange={(e) => setEditTags(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Quality / Importance (0.0 - 1.0)</label>
+                        <Input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          max="1"
+                          placeholder="0.5"
+                          value={editImportance}
+                          onChange={(e) => setEditImportance(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Inline Content Editor */}
+                  <div className="space-y-1.5">
+                    <label className="microlabel text-[11px]">Content (Markdown / Text)</label>
+                    <Textarea
+                      placeholder="Memory content..."
+                      className="min-h-[360px] font-mono text-sm leading-relaxed"
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Inline Action Bar */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t">
+                    <Button variant="outline" size="sm" onClick={cancelEditing} disabled={saving}>
+                      <X className="mr-1 h-4 w-4" />
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={handleSave} disabled={saving}>
+                      <Check className="mr-1 h-4 w-4" />
+                      {saving ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
+                  {memory.content}
+                </pre>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

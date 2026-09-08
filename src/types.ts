@@ -188,6 +188,9 @@ export interface MemoryUpdate {
   expires_at?: string | null;
   changed_by?: string;
   importance_score?: number;
+  scope?: MemoryScope;
+  namespace?: string | null;
+  document_type?: string | null;
   /** Set/upgrade the verification tier after the fact (the main post-hoc use case). */
   verification_tier?: VerificationTier;
   /** Free text accompanying a verification_tier change. */
