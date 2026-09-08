@@ -1639,4 +1639,8 @@ export const ApiPatchBodySchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   expires_at: z.string().nullable().optional(),
   changed_by: z.string().optional(),
+  scope: scopeField(),
+  namespace: namespaceField().nullable(),
+  document_type: documentTypeField().nullable(),
+  importance_score: z.number().min(0).max(1).optional(),
 });

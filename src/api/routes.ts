@@ -10,6 +10,7 @@ import { handleUpdate } from '../tools/update.js';
 import { handleDelete } from '../tools/delete.js';
 import { handleRelated } from '../tools/related.js';
 import { handleVersions } from '../tools/versions.js';
+import { handleVersionRestore } from '../tools/version-history.js';
 import { handleStats } from '../tools/stats.js';
 import { handleManifest } from '../tools/manifest.js';
 import { handleInsights } from '../tools/insights.js';
@@ -282,6 +283,24 @@ export function registerApiRoutes(
     res.json(result);
   }));
 
+  // ── POST /api/memories/:id/restore ──────────────────────────────────────
+  router.post('/api/memories/:id/restore', asyncHandler('POST /api/memories/:id/restore', async (req, res) => {
+    const v = Number.parseInt(String(req.body?.version), 10);
+    if (!v || isNaN(v) || v < 1) {
+      throw new HttpError(400, 'INVALID_VERSION', 'A valid version number (>= 1) is required');
+    }
+    assertNamespaceAllowed(param(req, 'id'));
+    const result = await handleVersionRestore(getDb(), await getEmbedder(), {
+      id: param(req, 'id'),
+      version: v,
+      changed_by: currentPrincipal()?.principal ?? 'web-dashboard (promote)',
+    });
+    if (!result.restored) {
+      throw new HttpError(400, 'RESTORE_FAILED', result.reason ?? 'Failed to restore version');
+    }
+    res.json(result);
+  }));
+
   // ── GET /api/memories/:id/related ───────────────────────────────────────
   router.get('/api/memories/:id/related', asyncHandler('GET /api/memories/:id/related', async (req, res) => {
     const q = parseOrThrow(ApiRelatedQuerySchema, req.query);
@@ -308,6 +327,10 @@ export function registerApiRoutes(
       tags: body.tags,
       metadata: body.metadata,
       expires_at: body.expires_at,
+      scope: body.scope,
+      namespace: body.namespace,
+      document_type: body.document_type,
+      importance_score: body.importance_score,
       // Audit attribution: an api-key request snapshots under the KEY'S
       // principal name (ALS context set by the §4 auth middleware); legacy
       // env-token / unauthenticated requests keep 'web-dashboard'. An explicit

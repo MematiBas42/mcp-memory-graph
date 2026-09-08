@@ -7,18 +7,31 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-} from "@/components/ui/dialog"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
-import { ArrowLeft, Pencil, Trash2, Clock, GitBranch } from "lucide-react"
+import {
+  ArrowLeft,
+  Pencil,
+  Trash2,
+  Clock,
+  GitBranch,
+  Check,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Minus,
+  RotateCcw,
+} from "lucide-react"
 import { toast } from "sonner"
-import { getMemory, getVersions, getRelated, updateMemory, deleteMemory } from "@/api/client"
+import { getMemory, getVersions, getRelated, updateMemory, deleteMemory, restoreVersion } from "@/api/client"
+import { getOrComputeDiff, sweepExpiredDiffCache } from "@/lib/diff-cache"
 import type { Memory, VersionRecord, SearchResult } from "@/types"
 
 export function MemoryDetail() {
@@ -29,12 +42,34 @@ export function MemoryDetail() {
   const [currentVersion, setCurrentVersion] = useState(0)
   const [related, setRelated] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(true)
+  const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({})
 
-  // Edit state
-  const [editOpen, setEditOpen] = useState(false)
+  // Inline Edit state
+  const [isEditing, setIsEditing] = useState(false)
   const [editTitle, setEditTitle] = useState("")
   const [editContent, setEditContent] = useState("")
+  const [editScope, setEditScope] = useState<Memory["scope"]>("project")
+  const [editNamespace, setEditNamespace] = useState("")
+  const [editDocType, setEditDocType] = useState("")
+  const [editTags, setEditTags] = useState("")
+  const [editImportance, setEditImportance] = useState("0.5")
   const [saving, setSaving] = useState(false)
+  const [promotingVersion, setPromotingVersion] = useState<number | null>(null)
+  const [activeTab, setActiveTab] = useState("content")
+
+  const initEditState = (m: Memory) => {
+    setEditTitle(m.title ?? "")
+    setEditContent(m.content)
+    setEditScope(m.scope)
+    setEditNamespace(m.namespace ?? "")
+    setEditDocType(m.document_type ?? "")
+    setEditTags(m.tags?.join(", ") ?? "")
+    setEditImportance(String(m.importance_score ?? 0.5))
+  }
+
+  useEffect(() => {
+    sweepExpiredDiffCache()
+  }, [])
 
   useEffect(() => {
     if (!id) return
@@ -46,6 +81,7 @@ export function MemoryDetail() {
     ])
       .then(([memData, verData, relData]) => {
         setMemory(memData.memory)
+        initEditState(memData.memory)
         setVersions(verData.history)
         setCurrentVersion(verData.current_version)
         setRelated(relData.related)
@@ -53,21 +89,73 @@ export function MemoryDetail() {
       .finally(() => setLoading(false))
   }, [id])
 
-  const handleEdit = async () => {
+  const startEditing = () => {
+    if (memory) {
+      initEditState(memory)
+      setIsEditing(true)
+      setActiveTab("content")
+    }
+  }
+
+  const cancelEditing = () => {
+    if (memory) {
+      initEditState(memory)
+    }
+    setIsEditing(false)
+  }
+
+  const handleSave = async () => {
     if (!id) return
     setSaving(true)
     try {
+      const parsedTags = editTags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+      const parsedImp = Number.parseFloat(editImportance)
+
       const result = await updateMemory(id, {
-        title: editTitle || undefined,
+        title: editTitle.trim() || undefined,
         content: editContent,
+        scope: editScope,
+        namespace: editNamespace.trim() || null,
+        document_type: editDocType.trim() || null,
+        tags: parsedTags,
+        importance_score: isNaN(parsedImp) ? undefined : Math.min(1, Math.max(0, parsedImp)),
       })
       setMemory(result.memory)
-      setEditOpen(false)
-      toast.success("Memory updated")
+      initEditState(result.memory)
+      setIsEditing(false)
+      // refresh version history
+      const verData = await getVersions(id)
+      setVersions(verData.history)
+      setCurrentVersion(verData.current_version)
+      toast.success("Memory updated successfully")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Update failed")
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handlePromote = async (versionNumber: number) => {
+    if (!id || !memory) return
+    if (!confirm(`Promote Version ${versionNumber} to become the new Current version?`)) return
+    setPromotingVersion(versionNumber)
+    try {
+      const res = await restoreVersion(id, versionNumber)
+      if (res.restored) {
+        setMemory(res.memory)
+        initEditState(res.memory)
+        const verData = await getVersions(id)
+        setVersions(verData.history)
+        setCurrentVersion(verData.current_version)
+        toast.success(`Version ${versionNumber} successfully promoted to Current (v${verData.current_version})`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Promote failed")
+    } finally {
+      setPromotingVersion(null)
     }
   }
 
@@ -124,53 +212,36 @@ export function MemoryDetail() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Dialog open={editOpen} onOpenChange={setEditOpen}>
-            <DialogTrigger
-              render={<Button variant="outline" size="sm" />}
-              onClick={() => {
-                setEditTitle(memory.title ?? "")
-                setEditContent(memory.content)
-              }}
-            >
+          {isEditing ? (
+            <>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                <Check className="mr-1 h-4 w-4" />
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={cancelEditing} disabled={saving}>
+                <X className="mr-1 h-4 w-4" />
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" size="sm" onClick={startEditing}>
               <Pencil className="mr-1 h-4 w-4" />
               Edit
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>Edit Memory</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <Input
-                  placeholder="Title"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                />
-                <Textarea
-                  placeholder="Content"
-                  className="min-h-[200px] font-mono text-sm"
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                />
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
-                <Button onClick={handleEdit} disabled={saving}>
-                  {saving ? "Saving..." : "Save"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Button variant="destructive" size="sm" onClick={handleDelete}>
+            </Button>
+          )}
+          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={isEditing || saving}>
             <Trash2 className="mr-1 h-4 w-4" />
             Delete
           </Button>
         </div>
       </div>
 
-      {/* Tabs: Content | Versions | Related */}
-      <Tabs defaultValue="content">
+      {/* Tabs: Content | Versions | Related | Metadata */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v ?? "content")}>
         <TabsList>
-          <TabsTrigger value="content">Content</TabsTrigger>
+          <TabsTrigger value="content">
+            {isEditing ? "Content (Editing)" : "Content"}
+          </TabsTrigger>
           <TabsTrigger value="versions">
             <Clock className="mr-1 h-4 w-4" />
             Versions ({versions.length})
@@ -185,9 +256,106 @@ export function MemoryDetail() {
         <TabsContent value="content" className="mt-4">
           <Card>
             <CardContent className="p-6">
-              <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
-                {memory.content}
-              </pre>
+              {isEditing ? (
+                <div className="space-y-4">
+                  {/* Compact Field Bar */}
+                  <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Title</label>
+                        <Input
+                          placeholder="Memory Title"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="microlabel text-[11px]">Scope</label>
+                          <Select value={editScope} onValueChange={(v) => v && setEditScope(v as Memory["scope"])}>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Scope" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="global">global</SelectItem>
+                              <SelectItem value="project">project</SelectItem>
+                              <SelectItem value="user">user</SelectItem>
+                              <SelectItem value="team">team</SelectItem>
+                              <SelectItem value="department">department</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="microlabel text-[11px]">Namespace</label>
+                          <Input
+                            placeholder="e.g. hyprland, nitro"
+                            value={editNamespace}
+                            onChange={(e) => setEditNamespace(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Document Type</label>
+                        <Input
+                          placeholder="e.g. decision, lesson, code"
+                          value={editDocType}
+                          onChange={(e) => setEditDocType(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Tags (comma-separated)</label>
+                        <Input
+                          placeholder="e.g. arch, hyprland, ui"
+                          value={editTags}
+                          onChange={(e) => setEditTags(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="microlabel text-[11px]">Quality / Importance (0.0 - 1.0)</label>
+                        <Input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          max="1"
+                          placeholder="0.5"
+                          value={editImportance}
+                          onChange={(e) => setEditImportance(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Inline Content Editor */}
+                  <div className="space-y-1.5">
+                    <label className="microlabel text-[11px]">Content (Markdown / Text)</label>
+                    <Textarea
+                      placeholder="Memory content..."
+                      className="min-h-[360px] font-mono text-sm leading-relaxed"
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Inline Action Bar */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t">
+                    <Button variant="outline" size="sm" onClick={cancelEditing} disabled={saving}>
+                      <X className="mr-1 h-4 w-4" />
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={handleSave} disabled={saving}>
+                      <Check className="mr-1 h-4 w-4" />
+                      {saving ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
+                  {memory.content}
+                </pre>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -197,26 +365,291 @@ export function MemoryDetail() {
             {versions.length === 0 && (
               <p className="text-sm text-muted-foreground">No previous versions</p>
             )}
-            {versions.map((v) => (
-              <Card key={v.id}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">
-                      Version {v.version}
-                    </CardTitle>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(v.changed_at).toLocaleString()}
-                      {v.changed_by && ` by ${v.changed_by}`}
-                    </span>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <pre className="line-clamp-6 whitespace-pre-wrap text-xs text-muted-foreground">
-                    {v.content}
-                  </pre>
-                </CardContent>
-              </Card>
-            ))}
+            {versions.map((v, index) => {
+              // Compare v with the version immediately newer than it (or current memory if it is the latest past version)
+              const nextVersion = index === 0 ? memory : versions[index - 1]
+              const oldText = v.content
+              const newText = nextVersion.content
+
+              // Format metadata JSON for comparison
+              const oldMetaStr = v.metadata ? JSON.stringify(JSON.parse(v.metadata), null, 2) : ""
+              const newMeta = (nextVersion as any).metadata
+              const newMetaStr = newMeta
+                ? typeof newMeta === "string"
+                  ? JSON.stringify(JSON.parse(newMeta), null, 2)
+                  : JSON.stringify(newMeta, null, 2)
+                : ""
+
+              // 7-day cached diff calculation with Fast-Path
+              const cacheKey = `${memory.id}_v${v.version}_to_${index === 0 ? currentVersion : versions[index - 1].version}`
+              const { summary, contentDiff, metaDiff, titleChanged } = getOrComputeDiff(
+                cacheKey,
+                oldText,
+                newText,
+                oldMetaStr,
+                newMetaStr,
+                v.title ?? "",
+                nextVersion.title ?? "",
+              )
+
+              const isExpanded = !!expandedVersions[v.id]
+              const toggleExpand = () => {
+                setExpandedVersions((prev) => ({ ...prev, [v.id]: !prev[v.id] }))
+              }
+
+              const hasMetaDiff = metaDiff.length > 0
+              const hasAnyChange = summary.added > 0 || summary.removed > 0 || hasMetaDiff || titleChanged
+              const isPastContent = v.content !== memory.content
+
+              return (
+                <Card
+                  key={v.id}
+                  className="transition-all duration-200 hover:border-primary/40 overflow-hidden"
+                >
+                  <CardHeader
+                    className="cursor-pointer select-none py-3 px-4 hover:bg-muted/40 transition-colors"
+                    onClick={toggleExpand}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-primary shrink-0 transition-transform duration-200" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200" />
+                        )}
+                        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                          <span>Version {v.version}</span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            → {index === 0 ? `Current (v${currentVersion})` : `v${versions[index - 1].version}`}
+                          </span>
+                        </CardTitle>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {/* Diff stats chips */}
+                        <div className="flex items-center gap-1.5 font-mono text-xs">
+                          {summary.added > 0 && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-green-500/10 px-1.5 py-0.5 font-medium text-green-600 dark:text-green-400">
+                              <Plus className="h-3 w-3" />
+                              {summary.added}
+                            </span>
+                          )}
+                          {summary.removed > 0 && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-red-500/10 px-1.5 py-0.5 font-medium text-red-600 dark:text-red-400">
+                              <Minus className="h-3 w-3" />
+                              {summary.removed}
+                            </span>
+                          )}
+                          {titleChanged && (
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-wider text-blue-500 border-blue-500/30">
+                              title
+                            </Badge>
+                          )}
+                          {hasMetaDiff && (
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-wider text-amber-500 border-amber-500/30">
+                              metadata
+                            </Badge>
+                          )}
+                          {!hasAnyChange && (
+                            <span className="text-muted-foreground text-[11px]">Metadata / settings update</span>
+                          )}
+                        </div>
+
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">
+                          {new Date(v.changed_at).toLocaleString()}
+                          {v.changed_by && ` · ${v.changed_by}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Collapsed snippet preview (up to 4 lines) */}
+                    {!isExpanded && (
+                      <div className="mt-2 pl-6">
+                        <pre className="line-clamp-4 whitespace-pre-wrap font-mono text-xs text-muted-foreground/70 leading-relaxed">
+                          {v.content}
+                        </pre>
+                      </div>
+                    )}
+                  </CardHeader>
+
+                  {isExpanded && (
+                    <CardContent className="border-t p-0 animate-in fade-in slide-in-from-top-1 duration-200">
+                      {/* Title Diff if changed (GitHub diff style) */}
+                      {titleChanged && (
+                        <div className="border-b divide-y divide-border/30 font-mono text-xs leading-5">
+                          <div className="bg-muted/40 px-4 py-1.5 text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+                            <span>Title Diff</span>
+                            <span className="text-[10px] text-blue-500 font-semibold uppercase tracking-wider">renamed</span>
+                          </div>
+                          <div className="flex bg-red-500/10 text-red-700 dark:text-red-300 px-4 py-0.5">
+                            <span className="select-none w-6 text-red-600 dark:text-red-400 shrink-0 text-center font-bold">
+                              -
+                            </span>
+                            <span className="whitespace-pre-wrap break-all flex-1">
+                              {v.title || "(Untitled)"}
+                            </span>
+                          </div>
+                          <div className="flex bg-green-500/10 text-green-700 dark:text-green-300 px-4 py-0.5">
+                            <span className="select-none w-6 text-green-600 dark:text-green-400 shrink-0 text-center font-bold">
+                              +
+                            </span>
+                            <span className="whitespace-pre-wrap break-all flex-1">
+                              {nextVersion.title || "(Untitled)"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* GitHub style content diff view */}
+                      <div className="divide-y divide-border/40 font-mono text-xs leading-5">
+                        <div className="bg-muted/40 px-4 py-1.5 text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+                          <span>Content</span>
+                          <span>
+                            {summary.added > 0 || summary.removed > 0
+                              ? `+${summary.added} / -${summary.removed} lines`
+                              : "No content changes"}
+                          </span>
+                        </div>
+                        {summary.added === 0 && summary.removed === 0 ? (
+                          <div className="overflow-x-auto max-h-[1000px] overflow-y-auto p-4 bg-muted/5">
+                            <pre className="whitespace-pre-wrap font-mono text-xs text-muted-foreground/85 leading-relaxed">
+                              {v.content}
+                            </pre>
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto max-h-[1000px] overflow-y-auto">
+                            {contentDiff.map((line, lIdx) => {
+                              if (line.type === "add") {
+                                return (
+                                  <div
+                                    key={lIdx}
+                                    className="flex bg-green-500/10 text-green-700 dark:text-green-300 px-4 py-0.5"
+                                  >
+                                    <span className="select-none w-6 text-green-600 dark:text-green-400 shrink-0 text-center font-bold">
+                                      +
+                                    </span>
+                                    <span className="whitespace-pre-wrap break-all flex-1">
+                                      {line.line}
+                                    </span>
+                                  </div>
+                                )
+                              }
+                              if (line.type === "del") {
+                                return (
+                                  <div
+                                    key={lIdx}
+                                    className="flex bg-red-500/10 text-red-700 dark:text-red-300 px-4 py-0.5"
+                                  >
+                                    <span className="select-none w-6 text-red-600 dark:text-red-400 shrink-0 text-center font-bold">
+                                      -
+                                    </span>
+                                    <span className="whitespace-pre-wrap break-all flex-1">
+                                      {line.line}
+                                    </span>
+                                  </div>
+                                )
+                              }
+                              return (
+                                <div
+                                  key={lIdx}
+                                  className="flex text-muted-foreground/80 hover:bg-muted/20 px-4 py-0.5"
+                                >
+                                  <span className="select-none w-6 shrink-0 text-center opacity-30">
+                                    {" "}
+                                  </span>
+                                  <span className="whitespace-pre-wrap break-all flex-1">
+                                    {line.line}
+                                  </span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+
+                        {/* Metadata Diff Section */}
+                        {hasMetaDiff && (
+                          <div>
+                            <div className="bg-muted/60 px-4 py-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400 flex items-center justify-between border-t">
+                              <span>Metadata Changes</span>
+                              <span>JSON Diff</span>
+                            </div>
+                            <div className="overflow-x-auto max-h-[600px] overflow-y-auto bg-muted/10">
+                              {metaDiff.map((line, mIdx) => {
+                                if (line.type === "add") {
+                                  return (
+                                    <div
+                                      key={mIdx}
+                                      className="flex bg-green-500/10 text-green-700 dark:text-green-300 px-4 py-0.5"
+                                    >
+                                      <span className="select-none w-6 text-green-600 dark:text-green-400 shrink-0 text-center font-bold">
+                                        +
+                                      </span>
+                                      <span className="whitespace-pre-wrap break-all flex-1">
+                                        {line.line}
+                                      </span>
+                                    </div>
+                                  )
+                                }
+                                if (line.type === "del") {
+                                  return (
+                                    <div
+                                      key={mIdx}
+                                      className="flex bg-red-500/10 text-red-700 dark:text-red-300 px-4 py-0.5"
+                                    >
+                                      <span className="select-none w-6 text-red-600 dark:text-red-400 shrink-0 text-center font-bold">
+                                        -
+                                      </span>
+                                      <span className="whitespace-pre-wrap break-all flex-1">
+                                        {line.line}
+                                      </span>
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div
+                                    key={mIdx}
+                                    className="flex text-muted-foreground/80 hover:bg-muted/20 px-4 py-0.5"
+                                  >
+                                    <span className="select-none w-6 shrink-0 text-center opacity-30">
+                                      {" "}
+                                    </span>
+                                    <span className="whitespace-pre-wrap break-all flex-1">
+                                      {line.line}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Bottom Action Footer (Promote to Current) */}
+                        {isPastContent && (
+                          <div className="bg-muted/30 px-4 py-2.5 flex items-center justify-between border-t">
+                            <span className="text-[11px] text-muted-foreground">
+                              Roll back this memory's content to Version {v.version}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs font-medium gap-1.5"
+                              disabled={promotingVersion !== null}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handlePromote(v.version)
+                              }}
+                            >
+                              <RotateCcw className={`h-3.5 w-3.5 ${promotingVersion === v.version ? "animate-spin" : ""}`} />
+                              {promotingVersion === v.version ? "Promoting..." : `Promote v${v.version} to Current`}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  )}
+                </Card>
+              )
+            })}
           </div>
         </TabsContent>
 

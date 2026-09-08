@@ -163,12 +163,28 @@ export function updateMemory(
     tags?: string[]
     metadata?: Record<string, unknown>
     expires_at?: string | null
+    scope?: Memory["scope"]
+    namespace?: string | null
+    document_type?: string | null
+    importance_score?: number
   },
 ): Promise<{ updated: boolean; memory: Memory }> {
   return fetchJson(`${BASE}/memories/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
+  })
+}
+
+// ── Restore / Promote ───────────────────────────────────────────────────
+export function restoreVersion(
+  id: string,
+  version: number,
+): Promise<{ restored: boolean; restored_from_version: number; memory: Memory }> {
+  return fetchJson(`${BASE}/memories/${id}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version }),
   })
 }
 
