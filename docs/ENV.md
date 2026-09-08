@@ -64,8 +64,10 @@ effect. Settings are read once at process start unless noted.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MCP_MEMORY_MODEL` | `Xenova/all-MiniLM-L6-v2` | Hugging Face model identifier loaded via `@huggingface/transformers`. |
-| `MCP_MEMORY_DIMENSIONS` | `384` | Vector dimension for `memories_vec`. Persisted in `schema_meta.embedding_dim` on first init; mismatched values throw on subsequent opens. |
+| `MCP_MEMORY_PROVIDER` | `transformers` | Embedding provider to use: `transformers` (in-process ONNX via `@huggingface/transformers`) or `ollama` (delegates to local/remote Ollama daemon, enabling GPU-accelerated embeddings like `nomic-embed-text`). |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Base URL for the Ollama daemon when `MCP_MEMORY_PROVIDER=ollama`. Note: if configured to a remote endpoint, embedded text is sent over the network to that host. |
+| `MCP_MEMORY_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model identifier. Under `ollama`, defaults to `nomic-embed-text`. |
+| `MCP_MEMORY_DIMENSIONS` | `384` | Vector dimension for `memories_vec`. Under `ollama`, defaults to `768`. Persisted in `schema_meta.embedding_dim` on first init; mismatched values throw on subsequent opens. |
 | `MCP_MEMORY_NLI_MODEL` | `Xenova/nli-deberta-v3-xsmall` | Cross-encoder NLI model used for contradiction detection in the self-correcting write gate. Loaded lazily on first use. |
 | `MCP_NLI_DISABLED` | _unset_ (gate on) | Set to `1` to turn the self-correcting NLI write-gate off: contradiction detection never runs. Note the gate only *retires* a contradicted fact when the store passes `on_conflict:'supersede'`; on the default `add` path a contradiction is reported + warned and both facts stay live (never auto-retired). This flag is an escape hatch for corpora of templated near-twin notes, where the MNLI model can read shared boilerplate as a bidirectional contradiction. Retired facts are always recoverable (`memory_restore` / `memory_history` / `as_of`), and every retire is audited in `memory_conflicts`, but with this set the gate never fires in the first place. |
 | `MCP_MEMORY_RERANKER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model used when search is called with `rerank: true`. Loaded lazily on first use. |
