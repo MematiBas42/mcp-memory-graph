@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getDatabase } from '../db/connection.js';
-import { initializeSchema, CURRENT_SCHEMA_VERSION } from '../db/schema.js';
+import { initializeSchema, CURRENT_SCHEMA_VERSION, configuredDimensions, configuredModelName } from '../db/schema.js';
 import { runMigrations } from '../db/migrations.js';
 import { TransformersEmbeddingProvider } from '../embeddings/transformers.js';
 import { CachedEmbeddingProvider } from '../embeddings/cache.js';
@@ -85,8 +85,8 @@ export function getEmbedder(): Promise<EmbeddingProvider> {
       if (process.env.MCP_MEMORY_PROVIDER === 'ollama') {
         const { OllamaEmbeddingProvider } = await import('../embeddings/ollama.js');
         const inner = new OllamaEmbeddingProvider({
-          model: process.env.MCP_MEMORY_MODEL || 'nomic-embed-text',
-          dimensions: Number(process.env.MCP_MEMORY_DIMENSIONS || '768'),
+          model: configuredModelName(),
+          dimensions: configuredDimensions(),
           baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
         });
         await inner.initialize();

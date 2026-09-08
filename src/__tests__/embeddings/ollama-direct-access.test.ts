@@ -48,5 +48,18 @@ describe('Ollama embedding provider direct access wiring', () => {
     expect(embedder.modelName).toBe('nomic-embed-text');
     expect(embedder.dimensions).toBe(768);
     expect(embedder.isReady()).toBe(true);
+
+    // Verify memoization
+    const embedder2 = await getEmbedder();
+    expect(embedder2).toBe(embedder);
+  });
+
+  it('respects OLLAMA_BASE_URL when instantiating OllamaEmbeddingProvider', async () => {
+    process.env.MCP_MEMORY_PROVIDER = 'ollama';
+    process.env.OLLAMA_BASE_URL = 'http://192.168.1.100:11434';
+
+    const embedder = await getEmbedder();
+    expect(embedder.modelName).toBe('nomic-embed-text');
+    expect(embedder.dimensions).toBe(768);
   });
 });
