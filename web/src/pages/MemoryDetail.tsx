@@ -15,9 +15,22 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
-import { ArrowLeft, Pencil, Trash2, Clock, GitBranch, Check, X } from "lucide-react"
+import {
+  ArrowLeft,
+  Pencil,
+  Trash2,
+  Clock,
+  GitBranch,
+  Check,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Minus,
+} from "lucide-react"
 import { toast } from "sonner"
 import { getMemory, getVersions, getRelated, updateMemory, deleteMemory } from "@/api/client"
+import { getOrComputeDiff, sweepExpiredDiffCache } from "@/lib/diff-cache"
 import type { Memory, VersionRecord, SearchResult } from "@/types"
 
 export function MemoryDetail() {
@@ -28,6 +41,7 @@ export function MemoryDetail() {
   const [currentVersion, setCurrentVersion] = useState(0)
   const [related, setRelated] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(true)
+  const [expandedVersions, setExpandedVersions] = useState<Record<string, boolean>>({})
 
   // Inline Edit state
   const [isEditing, setIsEditing] = useState(false)
@@ -50,6 +64,10 @@ export function MemoryDetail() {
     setEditTags(m.tags?.join(", ") ?? "")
     setEditImportance(String(m.importance_score ?? 0.5))
   }
+
+  useEffect(() => {
+    sweepExpiredDiffCache()
+  }, [])
 
   useEffect(() => {
     if (!id) return
@@ -324,26 +342,266 @@ export function MemoryDetail() {
             {versions.length === 0 && (
               <p className="text-sm text-muted-foreground">No previous versions</p>
             )}
-            {versions.map((v) => (
-              <Card key={v.id}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">
-                      Version {v.version}
-                    </CardTitle>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(v.changed_at).toLocaleString()}
-                      {v.changed_by && ` by ${v.changed_by}`}
-                    </span>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <pre className="line-clamp-6 whitespace-pre-wrap text-xs text-muted-foreground">
-                    {v.content}
-                  </pre>
-                </CardContent>
-              </Card>
-            ))}
+            {versions.map((v, index) => {
+              // Compare v with the version immediately newer than it (or current memory if it is the latest past version)
+              const nextVersion = index === 0 ? memory : versions[index - 1]
+              const oldText = v.content
+              const newText = nextVersion.content
+
+              // Format metadata JSON for comparison
+              const oldMetaStr = v.metadata ? JSON.stringify(JSON.parse(v.metadata), null, 2) : ""
+              const newMeta = (nextVersion as any).metadata
+              const newMetaStr = newMeta
+                ? typeof newMeta === "string"
+                  ? JSON.stringify(JSON.parse(newMeta), null, 2)
+                  : JSON.stringify(newMeta, null, 2)
+                : ""
+
+              // 7-day cached diff calculation with Fast-Path
+              const cacheKey = `${memory.id}_v${v.version}_to_${index === 0 ? currentVersion : versions[index - 1].version}`
+              const { summary, contentDiff, metaDiff, titleChanged } = getOrComputeDiff(
+                cacheKey,
+                oldText,
+                newText,
+                oldMetaStr,
+                newMetaStr,
+                v.title ?? "",
+                nextVersion.title ?? "",
+              )
+
+              const isExpanded = !!expandedVersions[v.id]
+              const toggleExpand = () => {
+                setExpandedVersions((prev) => ({ ...prev, [v.id]: !prev[v.id] }))
+              }
+
+              const hasMetaDiff = metaDiff.length > 0
+              const hasAnyChange = summary.added > 0 || summary.removed > 0 || hasMetaDiff || titleChanged
+
+              return (
+                <Card
+                  key={v.id}
+                  className="transition-all duration-200 hover:border-primary/40 overflow-hidden"
+                >
+                  <CardHeader
+                    className="cursor-pointer select-none py-3 px-4 hover:bg-muted/40 transition-colors"
+                    onClick={toggleExpand}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-primary shrink-0 transition-transform duration-200" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200" />
+                        )}
+                        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                          <span>Version {v.version}</span>
+                          <span className="text-xs font-normal text-muted-foreground">
+                            → {index === 0 ? `Current (v${currentVersion})` : `v${versions[index - 1].version}`}
+                          </span>
+                        </CardTitle>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {/* Diff stats chips */}
+                        <div className="flex items-center gap-1.5 font-mono text-xs">
+                          {summary.added > 0 && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-green-500/10 px-1.5 py-0.5 font-medium text-green-600 dark:text-green-400">
+                              <Plus className="h-3 w-3" />
+                              {summary.added}
+                            </span>
+                          )}
+                          {summary.removed > 0 && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-red-500/10 px-1.5 py-0.5 font-medium text-red-600 dark:text-red-400">
+                              <Minus className="h-3 w-3" />
+                              {summary.removed}
+                            </span>
+                          )}
+                          {titleChanged && (
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-wider text-blue-500 border-blue-500/30">
+                              title
+                            </Badge>
+                          )}
+                          {hasMetaDiff && (
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-wider text-amber-500 border-amber-500/30">
+                              metadata
+                            </Badge>
+                          )}
+                          {!hasAnyChange && (
+                            <span className="text-muted-foreground text-[11px]">Metadata / settings update</span>
+                          )}
+                        </div>
+
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">
+                          {new Date(v.changed_at).toLocaleString()}
+                          {v.changed_by && ` · ${v.changed_by}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Collapsed 2-line snippet preview */}
+                    {!isExpanded && (
+                      <div className="mt-2 pl-6">
+                        <pre className="line-clamp-2 whitespace-pre-wrap font-mono text-xs text-muted-foreground/70 leading-relaxed">
+                          {v.content}
+                        </pre>
+                      </div>
+                    )}
+                  </CardHeader>
+
+                  {isExpanded && (
+                    <CardContent className="border-t p-0 animate-in fade-in slide-in-from-top-1 duration-200">
+                      {/* Title Diff if changed (GitHub diff style) */}
+                      {titleChanged && (
+                        <div className="border-b divide-y divide-border/30 font-mono text-xs leading-5">
+                          <div className="bg-muted/40 px-4 py-1.5 text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+                            <span>Title Diff</span>
+                            <span className="text-[10px] text-blue-500 font-semibold uppercase tracking-wider">renamed</span>
+                          </div>
+                          <div className="flex bg-red-500/10 text-red-700 dark:text-red-300 px-4 py-0.5">
+                            <span className="select-none w-6 text-red-600 dark:text-red-400 shrink-0 text-center font-bold">
+                              -
+                            </span>
+                            <span className="whitespace-pre-wrap break-all flex-1">
+                              {v.title || "(Untitled)"}
+                            </span>
+                          </div>
+                          <div className="flex bg-green-500/10 text-green-700 dark:text-green-300 px-4 py-0.5">
+                            <span className="select-none w-6 text-green-600 dark:text-green-400 shrink-0 text-center font-bold">
+                              +
+                            </span>
+                            <span className="whitespace-pre-wrap break-all flex-1">
+                              {nextVersion.title || "(Untitled)"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* GitHub style content diff view */}
+                      <div className="divide-y divide-border/40 font-mono text-xs leading-5">
+                        <div className="bg-muted/40 px-4 py-1.5 text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+                          <span>Content Diff</span>
+                          <span>
+                            {summary.added > 0 || summary.removed > 0
+                              ? `+${summary.added} / -${summary.removed} lines`
+                              : "No content changes"}
+                          </span>
+                        </div>
+                        {summary.added === 0 && summary.removed === 0 ? (
+                          <div className="px-4 py-3 text-xs text-muted-foreground italic bg-muted/5">
+                            Content is identical between these revisions.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                            {contentDiff.map((line, lIdx) => {
+                              if (line.type === "add") {
+                                return (
+                                  <div
+                                    key={lIdx}
+                                    className="flex bg-green-500/10 text-green-700 dark:text-green-300 px-4 py-0.5"
+                                  >
+                                    <span className="select-none w-6 text-green-600 dark:text-green-400 shrink-0 text-center font-bold">
+                                      +
+                                    </span>
+                                    <span className="whitespace-pre-wrap break-all flex-1">
+                                      {line.line}
+                                    </span>
+                                  </div>
+                                )
+                              }
+                              if (line.type === "del") {
+                                return (
+                                  <div
+                                    key={lIdx}
+                                    className="flex bg-red-500/10 text-red-700 dark:text-red-300 px-4 py-0.5"
+                                  >
+                                    <span className="select-none w-6 text-red-600 dark:text-red-400 shrink-0 text-center font-bold">
+                                      -
+                                    </span>
+                                    <span className="whitespace-pre-wrap break-all flex-1">
+                                      {line.line}
+                                    </span>
+                                  </div>
+                                )
+                              }
+                              return (
+                                <div
+                                  key={lIdx}
+                                  className="flex text-muted-foreground/80 hover:bg-muted/20 px-4 py-0.5"
+                                >
+                                  <span className="select-none w-6 shrink-0 text-center opacity-30">
+                                    {" "}
+                                  </span>
+                                  <span className="whitespace-pre-wrap break-all flex-1">
+                                    {line.line}
+                                  </span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+
+                        {/* Metadata Diff Section */}
+                        {hasMetaDiff && (
+                          <div>
+                            <div className="bg-muted/60 px-4 py-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400 flex items-center justify-between border-t">
+                              <span>Metadata Changes</span>
+                              <span>JSON Diff</span>
+                            </div>
+                            <div className="overflow-x-auto max-h-[300px] overflow-y-auto bg-muted/10">
+                              {metaDiff.map((line, mIdx) => {
+                                if (line.type === "add") {
+                                  return (
+                                    <div
+                                      key={mIdx}
+                                      className="flex bg-green-500/10 text-green-700 dark:text-green-300 px-4 py-0.5"
+                                    >
+                                      <span className="select-none w-6 text-green-600 dark:text-green-400 shrink-0 text-center font-bold">
+                                        +
+                                      </span>
+                                      <span className="whitespace-pre-wrap break-all flex-1">
+                                        {line.line}
+                                      </span>
+                                    </div>
+                                  )
+                                }
+                                if (line.type === "del") {
+                                  return (
+                                    <div
+                                      key={mIdx}
+                                      className="flex bg-red-500/10 text-red-700 dark:text-red-300 px-4 py-0.5"
+                                    >
+                                      <span className="select-none w-6 text-red-600 dark:text-red-400 shrink-0 text-center font-bold">
+                                        -
+                                      </span>
+                                      <span className="whitespace-pre-wrap break-all flex-1">
+                                        {line.line}
+                                      </span>
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div
+                                    key={mIdx}
+                                    className="flex text-muted-foreground/80 hover:bg-muted/20 px-4 py-0.5"
+                                  >
+                                    <span className="select-none w-6 shrink-0 text-center opacity-30">
+                                      {" "}
+                                    </span>
+                                    <span className="whitespace-pre-wrap break-all flex-1">
+                                      {line.line}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  )}
+                </Card>
+              )
+            })}
           </div>
         </TabsContent>
 
