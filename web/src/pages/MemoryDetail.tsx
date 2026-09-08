@@ -27,9 +27,10 @@ import {
   ChevronRight,
   Plus,
   Minus,
+  RotateCcw,
 } from "lucide-react"
 import { toast } from "sonner"
-import { getMemory, getVersions, getRelated, updateMemory, deleteMemory } from "@/api/client"
+import { getMemory, getVersions, getRelated, updateMemory, deleteMemory, restoreVersion } from "@/api/client"
 import { getOrComputeDiff, sweepExpiredDiffCache } from "@/lib/diff-cache"
 import type { Memory, VersionRecord, SearchResult } from "@/types"
 
@@ -53,6 +54,7 @@ export function MemoryDetail() {
   const [editTags, setEditTags] = useState("")
   const [editImportance, setEditImportance] = useState("0.5")
   const [saving, setSaving] = useState(false)
+  const [promotingVersion, setPromotingVersion] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState("content")
 
   const initEditState = (m: Memory) => {
@@ -133,6 +135,27 @@ export function MemoryDetail() {
       toast.error(err instanceof Error ? err.message : "Update failed")
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handlePromote = async (versionNumber: number) => {
+    if (!id || !memory) return
+    if (!confirm(`Promote Version ${versionNumber} to become the new Current version?`)) return
+    setPromotingVersion(versionNumber)
+    try {
+      const res = await restoreVersion(id, versionNumber)
+      if (res.restored) {
+        setMemory(res.memory)
+        initEditState(res.memory)
+        const verData = await getVersions(id)
+        setVersions(verData.history)
+        setCurrentVersion(verData.current_version)
+        toast.success(`Version ${versionNumber} successfully promoted to Current (v${verData.current_version})`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Promote failed")
+    } finally {
+      setPromotingVersion(null)
     }
   }
 
@@ -376,6 +399,7 @@ export function MemoryDetail() {
 
               const hasMetaDiff = metaDiff.length > 0
               const hasAnyChange = summary.added > 0 || summary.removed > 0 || hasMetaDiff || titleChanged
+              const isPastContent = v.content !== memory.content
 
               return (
                 <Card
@@ -438,10 +462,10 @@ export function MemoryDetail() {
                       </div>
                     </div>
 
-                    {/* Collapsed 2-line snippet preview */}
+                    {/* Collapsed snippet preview (up to 4 lines) */}
                     {!isExpanded && (
                       <div className="mt-2 pl-6">
-                        <pre className="line-clamp-2 whitespace-pre-wrap font-mono text-xs text-muted-foreground/70 leading-relaxed">
+                        <pre className="line-clamp-4 whitespace-pre-wrap font-mono text-xs text-muted-foreground/70 leading-relaxed">
                           {v.content}
                         </pre>
                       </div>
@@ -479,7 +503,7 @@ export function MemoryDetail() {
                       {/* GitHub style content diff view */}
                       <div className="divide-y divide-border/40 font-mono text-xs leading-5">
                         <div className="bg-muted/40 px-4 py-1.5 text-[11px] font-medium text-muted-foreground flex items-center justify-between">
-                          <span>Content Diff</span>
+                          <span>Content</span>
                           <span>
                             {summary.added > 0 || summary.removed > 0
                               ? `+${summary.added} / -${summary.removed} lines`
@@ -487,11 +511,13 @@ export function MemoryDetail() {
                           </span>
                         </div>
                         {summary.added === 0 && summary.removed === 0 ? (
-                          <div className="px-4 py-3 text-xs text-muted-foreground italic bg-muted/5">
-                            Content is identical between these revisions.
+                          <div className="overflow-x-auto max-h-[1000px] overflow-y-auto p-4 bg-muted/5">
+                            <pre className="whitespace-pre-wrap font-mono text-xs text-muted-foreground/85 leading-relaxed">
+                              {v.content}
+                            </pre>
                           </div>
                         ) : (
-                          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                          <div className="overflow-x-auto max-h-[1000px] overflow-y-auto">
                             {contentDiff.map((line, lIdx) => {
                               if (line.type === "add") {
                                 return (
@@ -547,7 +573,7 @@ export function MemoryDetail() {
                               <span>Metadata Changes</span>
                               <span>JSON Diff</span>
                             </div>
-                            <div className="overflow-x-auto max-h-[300px] overflow-y-auto bg-muted/10">
+                            <div className="overflow-x-auto max-h-[600px] overflow-y-auto bg-muted/10">
                               {metaDiff.map((line, mIdx) => {
                                 if (line.type === "add") {
                                   return (
@@ -594,6 +620,28 @@ export function MemoryDetail() {
                                 )
                               })}
                             </div>
+                          </div>
+                        )}
+
+                        {/* Bottom Action Footer (Promote to Current) */}
+                        {isPastContent && (
+                          <div className="bg-muted/30 px-4 py-2.5 flex items-center justify-between border-t">
+                            <span className="text-[11px] text-muted-foreground">
+                              Roll back this memory's content to Version {v.version}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs font-medium gap-1.5 hover:bg-primary hover:text-primary-foreground transition-colors"
+                              disabled={promotingVersion !== null}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handlePromote(v.version)
+                              }}
+                            >
+                              <RotateCcw className={`h-3.5 w-3.5 ${promotingVersion === v.version ? "animate-spin" : ""}`} />
+                              {promotingVersion === v.version ? "Promoting..." : `Promote v${v.version} to Current`}
+                            </Button>
                           </div>
                         )}
                       </div>
