@@ -11,6 +11,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./opencode": {
+      "types": "./dist/opencode/index.d.ts",
+      "default": "./dist/opencode/index.js"
+    },
+    "./tui": {
+      "types": "./dist/opencode/tui.d.ts",
+      "default": "./dist/opencode/tui.js"
     }
   },
   "bin": {

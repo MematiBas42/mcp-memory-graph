@@ -117,7 +117,60 @@ function verifyHookScripts(): void {
   }
 }
 
-type Scope = 'user' | 'project';
+export type Scope = 'user' | 'project';
+export type ClientType = 'claude' | 'opencode' | 'auto';
+
+/**
+ * Auto-detects the active or installed assistant environment.
+ * OpenCode is preferred when running inside OpenCode (OPENCODE=1)
+ * or when ~/.config/opencode exists and ~/.claude does not.
+ * Otherwise defaults to 'claude' for backwards compatibility.
+ */
+export function detectClient(opts?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): 'claude' | 'opencode' {
+  const env = opts?.env ?? process.env;
+  const home = opts?.homeDir ?? homedir();
+
+  if (env.OPENCODE === '1' || env.OPENCODE || env.OPENCODE_PID) {
+    return 'opencode';
+  }
+
+  const hasOpenCode = existsSync(join(home, '.config', 'opencode'));
+  const hasClaude = existsSync(join(home, '.claude'));
+
+  if (hasOpenCode && !hasClaude) {
+    return 'opencode';
+  }
+
+  return 'claude';
+}
+
+/**
+ * Resolves which client to initialize for.
+ * Explicit --client <claude|opencode|auto> takes precedence.
+ * If unspecified or 'auto', auto-detects based on environment and installed configs.
+ */
+export function resolveClient(argv: string[] = process.argv): 'claude' | 'opencode' {
+  const idx = argv.indexOf('--client');
+  if (idx !== -1 && argv[idx + 1]) {
+    const val = argv[idx + 1].toLowerCase();
+    if (val === 'claude' || val === 'opencode') return val;
+    if (val === 'auto') return detectClient();
+    warn(`Unknown client "${argv[idx + 1]}", auto-detecting`);
+    return detectClient();
+  }
+  const clientArg = argv.find((a) => a.startsWith('--client='));
+  if (clientArg) {
+    const val = clientArg.split('=')[1]?.toLowerCase();
+    if (val === 'claude' || val === 'opencode') return val;
+    if (val === 'auto') return detectClient();
+    warn(`Unknown client "${val}", auto-detecting`);
+    return detectClient();
+  }
+  return detectClient();
+}
 
 /**
  * Resolve the install scope from argv. `--project` is a first-class ALIAS for
@@ -219,7 +272,7 @@ function mergeSettingsHooks(scope: Scope): void {
  * otherwise `~/.mcp-memory/config.json`. Throws if the resolved path escapes
  * the allowed root (defense-in-depth — paths here are not user-controlled).
  */
-function resolveWizardConfigPath(projectScoped: boolean): { configDir: string; configPath: string } {
+export function resolveWizardConfigPath(projectScoped: boolean): { configDir: string; configPath: string } {
   const root = projectScoped ? resolve(process.cwd()) : resolve(homedir());
   const configDir = join(root, '.mcp-memory');
   const configPath = join(configDir, 'config.json');
@@ -235,7 +288,7 @@ function resolveWizardConfigPath(projectScoped: boolean): { configDir: string; c
  * overwritten by the wizard, and prints a `git add` hint when committing the
  * graph for team sharing.
  */
-async function createConfig(opts: { projectScoped: boolean; interactive: boolean; flags: InitFlags }): Promise<ServerConfig> {
+export async function createConfig(opts: { projectScoped: boolean; interactive: boolean; flags: InitFlags }): Promise<ServerConfig> {
   const { configDir, configPath } = resolveWizardConfigPath(opts.projectScoped);
 
   let existing: Partial<ServerConfig> | undefined;
@@ -379,7 +432,7 @@ ${opts.calendarIntervalXml}
 `;
 }
 
-function installLaunchdPlist(scope: Scope): void {
+export function installLaunchdPlist(scope: Scope): void {
   if (!schedulesGlobalConsolidation(scope)) {
     info('Project scope — skipping the machine-global consolidation schedule');
     dim('A global launchd/cron job would target the default DB, not this project.');
@@ -681,7 +734,7 @@ function registerMcpServer(scope: Scope, enabled: boolean): void {
 }
 /* c8 ignore stop */
 
-export async function runInit(): Promise<void> {
+export async function runClaudeInit(): Promise<void> {
   // `--remote <url>` switches to the team/self-hosted HTTP path (no local hooks/DB).
   const remote = parseRemote();
   if (remote) {
@@ -697,7 +750,7 @@ export async function runInit(): Promise<void> {
   const mode = resolveInputMode(process.argv, !!process.stdin.isTTY);
   const usePrompter = mode !== 'defaults';
 
-  console.log(`\n${CYAN}MCP Memory Graph — Init (${scope} scope)${RESET}\n`);
+  console.log(`\n${CYAN}MCP Memory Graph — Init (Claude Code, ${scope} scope)${RESET}\n`);
 
   info('Step 1/7: Verifying hook scripts...');
   verifyHookScripts();
@@ -739,4 +792,15 @@ export async function runInit(): Promise<void> {
   installLaunchdPlist(scope);
 
   console.log(`\n${GREEN}Init complete! (${scope} scope)${RESET}\n`);
+}
+
+export async function runInit(): Promise<void> {
+  const client = resolveClient();
+  if (client === 'opencode') {
+    const { runOpenCodeInit } = await import('./init-opencode.js');
+    await runOpenCodeInit();
+    return;
+  }
+
+  await runClaudeInit();
 }

@@ -1,6 +1,7 @@
 import type { ServerConfig } from '../types.js';
 
 export type InputMode = 'defaults' | 'interactive' | 'nonInteractive';
+export type ClientType = 'claude' | 'opencode' | 'auto';
 
 /** --yes/-y → defaults; a TTY → interactive prompt; otherwise nonInteractive
  *  (the existing prompter still consumes piped stdin; the difference is the report). */
@@ -32,6 +33,7 @@ export interface InitFlags {
   reviewOnStop?: boolean;
   vault?: string;
   schedule?: Array<{ hour: number; minute: number }>;
+  client?: ClientType;
 }
 
 export function parseInitFlags(argv: string[]): InitFlags {
@@ -44,6 +46,23 @@ export function parseInitFlags(argv: string[]): InitFlags {
   if (vi !== -1 && argv[vi + 1]) flags.vault = argv[vi + 1];
   const sched = parseSchedule(argv);
   if (sched) flags.schedule = sched;
+
+  const ci = argv.indexOf('--client');
+  if (ci !== -1 && argv[ci + 1]) {
+    const val = argv[ci + 1].toLowerCase();
+    if (val === 'claude' || val === 'opencode' || val === 'auto') {
+      flags.client = val;
+    }
+  } else {
+    const clientArg = argv.find((a) => a.startsWith('--client='));
+    if (clientArg) {
+      const val = clientArg.split('=')[1]?.toLowerCase();
+      if (val === 'claude' || val === 'opencode' || val === 'auto') {
+        flags.client = val;
+      }
+    }
+  }
+
   return flags;
 }
 

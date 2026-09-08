@@ -46,13 +46,14 @@ Commands:
  * `rebuild --help` deleted the SQLite index).
  */
 const COMMAND_USAGE: Record<string, string> = {
-  init: `Usage: ${BIN} init [--scope user|project] [--project] [--yes] [--remote <url>]
+  init: `Usage: ${BIN} init [--scope user|project] [--client claude|opencode|auto] [--project] [--yes] [--remote <url>]
 
-Installs the memory server for Claude Code, then runs a short interactive
+Installs the memory server for Claude Code or OpenCode, then runs a short interactive
 wizard (sharing mode, defaults, auto-capture). --yes/-y skips the wizard and
 uses defaults.
 
 Flags:
+  --client claude|opencode|auto  client to configure (default: auto-detected)
   --scope user|project  install scope (default: user). --project is an alias
                         for --scope project.
   --yes, -y             non-interactive: accept all wizard defaults
@@ -70,7 +71,11 @@ Files written:
                  ~/Library/LaunchAgents/com.mcp-memory.consolidate.plist (macOS)
   project scope  .claude/settings.json, .mcp.json, .mcp-memory/config.json,
                  .claude/CLAUDE.md (no global schedule)
-  remote mode    .mcp.json + .claude/CLAUDE.md only (no local hooks/DB)`,
+  remote mode    .mcp.json + .claude/CLAUDE.md only (no local hooks/DB)
+  opencode       ~/.config/opencode/plugins/mcp-memory-graph.js (plugin),
+                 ~/.config/opencode/skills/mcp-memory-graph/ (skill),
+                 ~/.config/opencode/opencode.jsonc (MCP server registration),
+                 ~/.config/systemd/user/mcp-memory-consolidate.timer (Linux)`,
 
   uninstall: `Usage: ${BIN} uninstall
 
