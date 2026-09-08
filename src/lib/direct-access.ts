@@ -82,6 +82,16 @@ export function getEmbedder(): Promise<EmbeddingProvider> {
   if (!embedderPromise) {
     /* c8 ignore start */
     embedderPromise = (async () => {
+      if (process.env.MCP_MEMORY_PROVIDER === 'ollama') {
+        const { OllamaEmbeddingProvider } = await import('../embeddings/ollama.js');
+        const inner = new OllamaEmbeddingProvider({
+          model: process.env.MCP_MEMORY_MODEL || 'nomic-embed-text',
+          dimensions: Number(process.env.MCP_MEMORY_DIMENSIONS || '768'),
+          baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+        });
+        await inner.initialize();
+        return new CachedEmbeddingProvider(inner);
+      }
       const inner = new TransformersEmbeddingProvider();
       await inner.initialize();
       return new CachedEmbeddingProvider(inner);
