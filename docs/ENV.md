@@ -65,7 +65,7 @@ effect. Settings are read once at process start unless noted.
 | Variable | Default | Effect |
 |---|---|---|
 | `MCP_MEMORY_PROVIDER` | `transformers` | Embedding provider to use: `transformers` (in-process ONNX via `@huggingface/transformers`) or `ollama` (delegates to local/remote Ollama daemon, enabling GPU-accelerated embeddings like `nomic-embed-text`). |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Base URL for the Ollama daemon when `MCP_MEMORY_PROVIDER=ollama`. |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Base URL for the Ollama daemon when `MCP_MEMORY_PROVIDER=ollama`. Note: if configured to a remote endpoint, embedded text is sent over the network to that host. |
 | `MCP_MEMORY_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model identifier. Under `ollama`, defaults to `nomic-embed-text`. |
 | `MCP_MEMORY_DIMENSIONS` | `384` | Vector dimension for `memories_vec`. Under `ollama`, defaults to `768`. Persisted in `schema_meta.embedding_dim` on first init; mismatched values throw on subsequent opens. |
 | `MCP_MEMORY_NLI_MODEL` | `Xenova/nli-deberta-v3-xsmall` | Cross-encoder NLI model used for contradiction detection in the self-correcting write gate. Loaded lazily on first use. |
