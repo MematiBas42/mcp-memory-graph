@@ -176,6 +176,18 @@ export function updateMemory(
   })
 }
 
+// ── Restore / Promote ───────────────────────────────────────────────────
+export function restoreVersion(
+  id: string,
+  version: number,
+): Promise<{ restored: boolean; restored_from_version: number; memory: Memory }> {
+  return fetchJson(`${BASE}/memories/${id}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version }),
+  })
+}
+
 // ── Delete ───────────────────────────────────────────────────────────────
 export function deleteMemory(id: string): Promise<{ deleted: number }> {
   return fetchJson(`${BASE}/memories/${id}`, { method: "DELETE" })
