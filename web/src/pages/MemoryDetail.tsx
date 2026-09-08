@@ -632,7 +632,7 @@ export function MemoryDetail() {
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-8 text-xs font-medium gap-1.5 hover:bg-primary hover:text-primary-foreground transition-colors"
+                              className="h-8 text-xs font-medium gap-1.5"
                               disabled={promotingVersion !== null}
                               onClick={(e) => {
                                 e.stopPropagation()
