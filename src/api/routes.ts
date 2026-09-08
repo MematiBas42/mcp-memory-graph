@@ -308,6 +308,10 @@ export function registerApiRoutes(
       tags: body.tags,
       metadata: body.metadata,
       expires_at: body.expires_at,
+      scope: body.scope,
+      namespace: body.namespace,
+      document_type: body.document_type,
+      importance_score: body.importance_score,
       // Audit attribution: an api-key request snapshots under the KEY'S
       // principal name (ALS context set by the §4 auth middleware); legacy
       // env-token / unauthenticated requests keep 'web-dashboard'. An explicit

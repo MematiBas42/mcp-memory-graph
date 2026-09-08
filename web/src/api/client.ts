@@ -163,6 +163,10 @@ export function updateMemory(
     tags?: string[]
     metadata?: Record<string, unknown>
     expires_at?: string | null
+    scope?: Memory["scope"]
+    namespace?: string | null
+    document_type?: string | null
+    importance_score?: number
   },
 ): Promise<{ updated: boolean; memory: Memory }> {
   return fetchJson(`${BASE}/memories/${id}`, {
