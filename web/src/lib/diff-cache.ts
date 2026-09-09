@@ -1,47 +1,110 @@
 import { computeLineDiff, summarizeLineDiff, type DiffLine, type DiffSummary } from "./diff"
 
-const CACHE_PREFIX = "mcp_diff_cache_"
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+export const MAX_DIFF_CACHE_SIZE = 100
 
-interface CacheEntry {
-  ts: number // timestamp
+export interface DiffResult {
   summary: DiffSummary
-  diff: DiffLine[]
-  metaDiff?: DiffLine[]
-  titleChanged?: boolean
+  contentDiff: DiffLine[]
+  metaDiff: DiffLine[]
+  titleChanged: boolean
+  diff?: DiffLine[]
+}
+
+const diffMap = new Map<string, any>()
+
+/**
+ * Builds standard cache key for diffs between two versions of a memory.
+ */
+export function makeDiffCacheKey(
+  memoryId: string,
+  v1: number | string,
+  v2: number | string,
+): string {
+  return `${memoryId}_v${v1}_to_${v2}`
 }
 
 /**
- * Sweeps expired diff entries from localStorage to keep storage clean.
+ * Retrieves a cached diff by memoryId and versions, or direct cache key.
+ */
+export function getCachedDiff<T = DiffResult>(
+  memoryId: string,
+  v1?: number | string,
+  v2?: number | string,
+): T | undefined {
+  const key = v1 !== undefined && v2 !== undefined ? makeDiffCacheKey(memoryId, v1, v2) : memoryId
+  if (!diffMap.has(key)) return undefined
+  const val = diffMap.get(key)
+  // Refresh LRU order (delete & set moves to end of Map insertion order)
+  diffMap.delete(key)
+  diffMap.set(key, val)
+  return val as T
+}
+
+/**
+ * Stores a diff into bounded in-memory Map with LRU eviction.
+ */
+export function setCachedDiff<T = DiffResult>(
+  memoryId: string,
+  v1: number | string,
+  v2: number | string,
+  diff: T,
+): void
+export function setCachedDiff<T = DiffResult>(
+  cacheKey: string,
+  diff: T,
+): void
+export function setCachedDiff<T = DiffResult>(
+  memoryIdOrKey: string,
+  v1OrDiff: number | string | T,
+  v2?: number | string,
+  diff?: T,
+): void {
+  let key: string
+  let val: T
+  if (v2 !== undefined && diff !== undefined) {
+    key = makeDiffCacheKey(memoryIdOrKey, v1OrDiff as number | string, v2)
+    val = diff
+  } else {
+    key = memoryIdOrKey
+    val = v1OrDiff as T
+  }
+
+  if (diffMap.has(key)) {
+    diffMap.delete(key)
+  } else if (diffMap.size >= MAX_DIFF_CACHE_SIZE) {
+    const oldestKey = diffMap.keys().next().value
+    if (oldestKey !== undefined) {
+      diffMap.delete(oldestKey)
+    }
+  }
+  diffMap.set(key, val)
+}
+
+/**
+ * Clears the in-memory diff cache.
+ */
+export function clearDiffCache(): void {
+  diffMap.clear()
+}
+
+/**
+ * Returns current count of cached diff entries in memory.
+ */
+export function getDiffCacheSize(): number {
+  return diffMap.size
+}
+
+/**
+ * Kept for backward compatibility with existing callers.
+ * In-memory cache is bounded to MAX_DIFF_CACHE_SIZE with LRU eviction.
  */
 export function sweepExpiredDiffCache(): void {
-  try {
-    const now = Date.now()
-    const keysToRemove: string[] = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (key && key.startsWith(CACHE_PREFIX)) {
-        try {
-          const item = JSON.parse(localStorage.getItem(key) || "")
-          if (item?.ts && now - item.ts > ONE_WEEK_MS) {
-            keysToRemove.push(key)
-          }
-        } catch {
-          keysToRemove.push(key)
-        }
-      }
-    }
-    for (const k of keysToRemove) {
-      localStorage.removeItem(k)
-    }
-  } catch {
-    // Ignore storage quota or access errors
-  }
+  // No-op for bounded in-memory Map
 }
 
 /**
- * Computes or retrieves from 7-day localStorage cache a complete diff.
- * Past versions in SQLite are immutable, so this cache is 100% safe.
+ * Computes or retrieves from in-memory cache a complete diff.
+ * Past versions in SQLite are immutable, so in-memory caching is safe.
  */
 export function getOrComputeDiff(
   cacheKey: string,
@@ -51,33 +114,13 @@ export function getOrComputeDiff(
   newMetaStr = "",
   oldTitle = "",
   newTitle = "",
-): {
-  summary: DiffSummary
-  contentDiff: DiffLine[]
-  metaDiff: DiffLine[]
-  titleChanged: boolean
-} {
-  const fullKey = `${CACHE_PREFIX}${cacheKey}`
-
-  // 1. Try reading from 1-week local storage cache
-  try {
-    const cachedRaw = localStorage.getItem(fullKey)
-    if (cachedRaw) {
-      const cached = JSON.parse(cachedRaw) as CacheEntry
-      if (Date.now() - cached.ts < ONE_WEEK_MS) {
-        return {
-          summary: cached.summary,
-          contentDiff: cached.diff,
-          metaDiff: cached.metaDiff || [],
-          titleChanged: !!cached.titleChanged,
-        }
-      }
-    }
-  } catch {
-    // Fall back to computation if JSON parse fails
+): DiffResult {
+  const cached = getCachedDiff<DiffResult>(cacheKey)
+  if (cached) {
+    return cached
   }
 
-  // 2. Fast-path: if text is completely identical, skip O(m*n) algorithm entirely
+  // Fast-path: if text is completely identical, skip O(m*n) algorithm entirely
   let contentDiff: DiffLine[]
   let summary: DiffSummary
 
@@ -98,24 +141,15 @@ export function getOrComputeDiff(
 
   const titleChanged = oldTitle !== newTitle
 
-  // 3. Store into cache with 7-day TTL
-  try {
-    const entry: CacheEntry = {
-      ts: Date.now(),
-      summary,
-      diff: contentDiff,
-      metaDiff,
-      titleChanged,
-    }
-    localStorage.setItem(fullKey, JSON.stringify(entry))
-  } catch {
-    // Storage quota might be exceeded for massive files; fails gracefully
-  }
-
-  return {
+  const result: DiffResult = {
     summary,
     contentDiff,
     metaDiff,
     titleChanged,
+    diff: contentDiff,
   }
+
+  setCachedDiff<DiffResult>(cacheKey, result)
+
+  return result
 }
