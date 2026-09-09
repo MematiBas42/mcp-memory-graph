@@ -13,6 +13,7 @@ import {
   rankMemories,
   formatRecall,
   trLowerCase,
+  MEMORY_PERSISTENCE_DIRECTIVE,
   type MemoryRow,
   type ScoredMemoryRow,
 } from '../hooks/memory-user-prompt.js';
@@ -935,6 +936,8 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           summaryBlock += `\n--- ${label} ---\n${block.content}\n`;
         }
 
+        summaryBlock += `\n--- memory persistence directive ---\n${MEMORY_PERSISTENCE_DIRECTIVE}\n`;
+
         output.system.push(summaryBlock.trim());
         logBridge('system.transform', {
           totalCount,
@@ -974,7 +977,9 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
         if (!fullPrompt) return;
 
         const tokens = tokenizeOpenCode(fullPrompt);
-        if (!shouldRecall(tokens)) return;
+        if (!shouldRecall(tokens) || activeAdapter.engine === 'noop' || activeAdapter.engine === 'remote-noop') {
+          return;
+        }
 
         const cwd = input.directory || process.cwd();
         let namespace: string;

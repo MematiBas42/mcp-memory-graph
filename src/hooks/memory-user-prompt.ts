@@ -145,6 +145,14 @@ export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 5): Sc
     .slice(0, limit);
 }
 
+export const MEMORY_PERSISTENCE_DIRECTIVE = `[Memory Persistence Protocol]
+When finishing a task or reaching a significant milestone, persist high-signal knowledge worth remembering for future sessions:
+- Critical architectural decisions / preferences / project rules -> memory_store (always provide a concise title, document_type: "decision"|"convention")
+- Root causes of hard-won bug fixes, recurring mistakes & their solutions -> memory_lesson (fields: {symptom, root_cause, fix, prevention})
+- Always-in-context golden rules & hard constraints -> core_memory_append
+- Work thread state & next steps -> memory_session_state or memory_session_note
+*NOTE: Do NOT persist routine/transient status updates ("file updated", etc.); only record durable insights that will prevent future agents from repeating mistakes or re-deriving decisions.`;
+
 /** Render the recall block, or null when nothing titled survived ranking. */
 export function formatRecall(memories: MemoryRow[]): string | null {
   const lines = memories
@@ -155,7 +163,8 @@ export function formatRecall(memories: MemoryRow[]): string | null {
     `Possibly-relevant stored memories (search MCP before re-deriving this task):\n` +
     lines.join('\n') +
     `\nRun memory_search / memory_get to load full content — MCP wins over file memory on conflict.` +
-    `\nIf a recalled memory appears irrelevant or its title/scope is misleading (containing general keywords, not directing the scope), adjust it via memory_update based on its actual content.\n`
+    `\nIf a recalled memory appears irrelevant or its title/scope is misleading (containing general keywords, not directing the scope), adjust it via memory_update based on its actual content.\n\n` +
+    MEMORY_PERSISTENCE_DIRECTIVE + '\n'
   );
 }
 
