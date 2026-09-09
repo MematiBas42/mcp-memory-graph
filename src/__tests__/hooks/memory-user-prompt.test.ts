@@ -21,6 +21,15 @@ describe('memory-user-prompt hook helpers', () => {
       expect(tokenize('go to db now')).toEqual([]);
     });
 
+    it('extracts Turkish unicode words and common 3-char technical terms', () => {
+      const t = tokenize('Postgres veritabanında Türkçe işlem ve API entegrasyonu');
+      expect(t).toContain('postgres');
+      expect(t).toContain('veritabanında');
+      expect(t).toContain('türkçe');
+      expect(t).toContain('işlem');
+      expect(t).toContain('api');
+    });
+
     it('caps the token set so a long prompt cannot fan out unbounded', () => {
       const long = Array.from({ length: 40 }, (_, i) => `wordnum${i}`).join(' ');
       expect(tokenize(long).length).toBeLessThanOrEqual(8);

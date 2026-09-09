@@ -25,6 +25,25 @@ const STOPWORDS = new Set([
   'kan', 'skal', 'med', 'det', 'den', 'der', 'som', 'til', 'har', 'hvad',
 ]);
 
+/** Common 3-character technical terms allowed as tokens. */
+const TECH_3_CHARS = new Set([
+  'api', 'sql', 'gpu', 'cpu', 'ram', 'git', 'mac', 'web', 'app', 'jwt',
+  'tui', 'mcp', 'cli', 'ssh', 'lan', 'log', 'bug', 'env', 'dns', 'ssl',
+]);
+
+/**
+ * Safely lowercase a string respecting Turkish dotted/dotless I characters
+ * for natural language while preserving ASCII technical acronyms.
+ */
+export function trLowerCase(str: string): string {
+  if (!str) return '';
+  // If word is pure ASCII or typical uppercase acronym (like API, SQL, CLI), standard lowercase
+  if (/^[A-Za-z0-9_-]+$/.test(str)) {
+    return str.toLowerCase();
+  }
+  return str.replace(/İ/g, 'i').replace(/I/g, 'ı').toLowerCase().normalize('NFC');
+}
+
 export interface MemoryRow {
   id: string;
   title: string | null;
@@ -32,13 +51,17 @@ export interface MemoryRow {
   importance_score: number | null;
 }
 
-/** Pull searchable tokens from the prompt: 4-7 digit ids + words >= 4 chars. */
+/** Pull searchable tokens from the prompt: 4-7 digit ids + words >= 4 chars (or 3-char tech terms). */
 export function tokenize(prompt: string): string[] {
   const tokens = new Set<string>();
-  for (const m of prompt.matchAll(/\d{4,7}/g)) tokens.add(m[0]); // ticket/PR ids
-  for (const w of prompt.toLowerCase().matchAll(/[a-zæøå][a-zæøå0-9_-]{3,}/gi)) {
-    const t = w[0];
-    if (!STOPWORDS.has(t)) tokens.add(t);
+  for (const m of prompt.matchAll(/\b\d{4,7}\b/g)) tokens.add(m[0]); // ticket/PR ids
+  for (const w of prompt.matchAll(/[\p{L}\p{N}_-]{3,}/gu)) {
+    const t = trLowerCase(w[0]);
+    if (!STOPWORDS.has(t)) {
+      if (t.length >= 4 || TECH_3_CHARS.has(t)) {
+        tokens.add(t);
+      }
+    }
   }
   return [...tokens].slice(0, 8); // bound the LIKE fan-out
 }
@@ -62,8 +85,8 @@ export function shouldRecall(tokens: string[]): boolean {
 export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 3): MemoryRow[] {
   return rows
     .map(r => {
-      const title = (r.title || '').toLowerCase();
-      const content = (r.content || '').toLowerCase();
+      const title = trLowerCase(r.title || '');
+      const content = trLowerCase(r.content || '');
       let match = 0; // token-derived relevance, importance excluded
       for (const t of tokens) {
         if (title.includes(t)) match += 3;
