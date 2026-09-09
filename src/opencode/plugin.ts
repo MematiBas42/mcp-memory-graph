@@ -1053,7 +1053,7 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
                 query: fullPrompt,
                 documents: ranked.map((r) => (r.title ? r.title + '\n' : '') + (r.content || '')),
               }),
-              signal: AbortSignal.timeout(600),
+              signal: AbortSignal.timeout(3000),
             });
             if (resp.ok) {
               const data = (await resp.json()) as {

@@ -1156,9 +1156,9 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
         mockApi.event.emit("session.updated", {});
         expect(promptNode.props.content).toBe("0 🧠 5");
 
-        // 6. session.prompt triggers immediate refresh AND schedules 100ms and 300ms delayed refreshes
+        // 6. session.prompt triggers immediate refresh
         mockApi.event.emit("session.prompt");
-        // Update session state simulated at 50ms (plugin writes to disk)
+        // Update session state simulated (plugin writes to disk)
         saveSessionState(sid, {
           enabled: true,
           mutedIds: [],
@@ -1170,20 +1170,12 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
           history: [{ id: "m-1", title: "Fast", snippet: "...", importance_score: 1 }],
         });
 
-        // Before timers advance, session state was not yet re-read
-        expect(promptNode.props.content).toBe("0 🧠 5");
-
-        // Advance 100ms: first delayed refresh fires and picks up the disk state!
-        vi.advanceTimersByTime(100);
+        // Event or message update immediately picks up the new state without timers
+        mockApi.event.emit("message.updated", {});
         expect(promptNode.props.content).toBe("1 🧠 5");
         expect(promptNode.props.fg).toBe(mockApi.theme.current.warning);
 
-        // Advance further to 300ms: second delayed refresh runs safely
-        vi.advanceTimersByTime(200);
-        expect(promptNode.props.content).toBe("1 🧠 5");
-
-        // 7. Cleanup disposes all listeners and clears active timers
-        mockApi.event.emit("session.prompt"); // schedules new timers
+        // 7. Cleanup disposes all listeners and watcher cleanly
         expect(cleanupHook).toBeDefined();
         cleanupHook!();
 

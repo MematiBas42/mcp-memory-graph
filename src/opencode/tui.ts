@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, watch, FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
@@ -220,14 +220,22 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
 
   refreshPrompt();
 
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const scheduleRefresh = (delayMs: number) => {
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      refreshPrompt();
-    }, delayMs);
-    timers.add(timer);
-  };
+  // Native OS-level reactive file watching (inotify on Linux) - 0ms event-driven sync
+  let watcher: FSWatcher | null = null;
+  try {
+    const sessionsDir = join(homedir(), ".mcp-memory", "sessions");
+    if (!existsSync(sessionsDir)) {
+      mkdirSync(sessionsDir, { recursive: true });
+    }
+    const currentFile = `${(sessionId() || "global").replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
+    watcher = watch(sessionsDir, (_eventType, filename) => {
+      if (!filename || filename === currentFile || filename.endsWith(".json")) {
+        refreshPrompt();
+      }
+    });
+  } catch {
+    // Graceful fallback if fs.watch fails on restricted platforms
+  }
 
   const disposes: (() => void)[] = [];
   const addListener = (event: string, handler: (e: any) => void) => {
@@ -237,32 +245,23 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
     }
   };
 
-  // 1. message.updated: Trigger immediate refresh on every update (e.g. user message or completed)
-  addListener("message.updated", (_e: any) => {
-    refreshPrompt();
-  });
-
-  // 2. message.part.inserted / message.part.updated: Trigger immediate refresh
+  // Event bus listeners for session lifecycle
+  addListener("message.updated", () => refreshPrompt());
   addListener("message.part.inserted", () => refreshPrompt());
   addListener("message.part.updated", () => refreshPrompt());
-
-  // 3. session.prompt: User hit Enter. Immediate refresh + short delayed refreshes (100ms, 300ms)
-  // to catch background plugin.ts GPU reranker recall writing to disk.
-  addListener("session.prompt", () => {
-    refreshPrompt();
-    scheduleRefresh(100);
-    scheduleRefresh(300);
-  });
-
-  // 4. session.updated & session.idle
+  addListener("session.prompt", () => refreshPrompt());
   addListener("session.updated", () => refreshPrompt());
   addListener("session.idle", () => refreshPrompt());
 
   solid.onCleanup?.(() => {
-    for (const timer of timers) {
-      clearTimeout(timer);
+    if (watcher) {
+      try {
+        watcher.close();
+      } catch {
+        // safe close
+      }
+      watcher = null;
     }
-    timers.clear();
     for (const dispose of disposes) {
       dispose();
     }
