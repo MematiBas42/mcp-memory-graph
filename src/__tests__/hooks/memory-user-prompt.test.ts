@@ -4,10 +4,28 @@ import {
   shouldRecall,
   rankMemories,
   formatRecall,
+  trLowerCase,
+  matchWordBoundary,
   type MemoryRow,
 } from '../../hooks/memory-user-prompt.js';
 
 describe('memory-user-prompt hook helpers', () => {
+  describe('trLowerCase canonical normalization', () => {
+    it('normalizes Turkish dotted/dotless I characters canonically to ASCII i while preserving other Turkish characters', () => {
+      expect(trLowerCase('İşlem')).toBe('işlem');
+      expect(trLowerCase('Işık')).toBe('işik');
+      expect(trLowerCase('kullanıcı')).toBe('kullanici');
+    });
+
+    it('preserves matching for English acronyms and words with uppercase I', () => {
+      expect(trLowerCase('API')).toBe('api');
+      expect(trLowerCase('CLI')).toBe('cli');
+      expect(trLowerCase('GIT')).toBe('git');
+      expect(trLowerCase('UI')).toBe('ui');
+      expect(trLowerCase('Internal')).toBe('internal');
+    });
+  });
+
   describe('tokenize', () => {
     it('extracts 4-7 digit ids and words >= 4 chars, drops stopwords', () => {
       const t = tokenize('continue the 4821 checkout deploy');
@@ -17,13 +35,48 @@ describe('memory-user-prompt hook helpers', () => {
       expect(t).not.toContain('the'); // stopword
     });
 
-    it('drops words shorter than 4 chars', () => {
+    it('extracts allowed 3-char technical terms', () => {
+      const t = tokenize('configure api and cli tools with git and gpu');
+      expect(t).toContain('api');
+      expect(t).toContain('cli');
+      expect(t).toContain('git');
+      expect(t).toContain('gpu');
+      expect(t).toContain('tools');
+    });
+
+    it('extracts hyphenated technical terms', () => {
+      const t = tokenize('switch to bge-m3 embedding model');
+      expect(t).toContain('bge-m3');
+      expect(t).toContain('embedding');
+      expect(t).toContain('model');
+    });
+
+    it('drops words shorter than 4 chars when not in technical allowlist', () => {
       expect(tokenize('go to db now')).toEqual([]);
     });
 
     it('caps the token set so a long prompt cannot fan out unbounded', () => {
       const long = Array.from({ length: 40 }, (_, i) => `wordnum${i}`).join(' ');
       expect(tokenize(long).length).toBeLessThanOrEqual(8);
+    });
+  });
+
+  describe('matchWordBoundary', () => {
+    it('matches uppercase English technical acronyms against lowercase tokens', () => {
+      expect(matchWordBoundary('API Gateway Configuration', 'api')).toBe(true);
+      expect(matchWordBoundary('CLI Tools & Scripts', 'cli')).toBe(true);
+      expect(matchWordBoundary('GIT Workflow Standards', 'git')).toBe(true);
+      expect(matchWordBoundary('UI Design Guidelines', 'ui')).toBe(true);
+      expect(matchWordBoundary('Internal Architecture Doc', 'internal')).toBe(true);
+    });
+
+    it('matches Turkish words with different cases', () => {
+      expect(matchWordBoundary('İşlem Sırası ve Öncelik', 'işlem')).toBe(true);
+      expect(matchWordBoundary('Kullanıcı Ayarları', 'kullanici')).toBe(true);
+    });
+
+    it('matches hyphenated terms cleanly', () => {
+      expect(matchWordBoundary('Using bge-m3 embeddings', 'bge-m3')).toBe(true);
     });
   });
 
@@ -34,6 +87,11 @@ describe('memory-user-prompt hook helpers', () => {
 
     it('fires on >=2 meaningful tokens', () => {
       expect(shouldRecall(tokenize('payment retry threshold'))).toBe(true);
+    });
+
+    it('fires on single technical 3-char token or single word >= 5 chars', () => {
+      expect(shouldRecall(['api'])).toBe(true);
+      expect(shouldRecall(['bge-m3'])).toBe(true);
     });
 
     it('does NOT fire on bare affirmations', () => {

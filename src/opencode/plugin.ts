@@ -12,7 +12,9 @@ import {
   shouldRecall,
   rankMemories,
   formatRecall,
+  trLowerCase,
   type MemoryRow,
+  type ScoredMemoryRow,
 } from '../hooks/memory-user-prompt.js';
 import type {
   PluginInput,
@@ -271,6 +273,13 @@ export async function createDatabaseAdapter(
       const BunDatabase = bunSqlite.Database || bunSqlite.default;
       if (BunDatabase) {
         const bunDb = new BunDatabase(dbPath, { readonly: true });
+        try {
+          if (typeof (bunDb as any).customFunction === 'function') {
+            (bunDb as any).customFunction('tr_lower', (s: unknown) => (typeof s === 'string' ? trLowerCase(s) : ''));
+          }
+        } catch {
+          // Safe fallback
+        }
         let isClosed = false;
         return {
           engine: 'bun:sqlite',
@@ -308,6 +317,11 @@ export async function createDatabaseAdapter(
       const betterSqliteModule = await import('better-sqlite3');
       const BetterSqlite3 = betterSqliteModule.default || betterSqliteModule;
       const nodeDb = new BetterSqlite3(dbPath, { readonly: true });
+      try {
+        nodeDb.function('tr_lower', (s: unknown) => (typeof s === 'string' ? trLowerCase(s) : ''));
+      } catch {
+        // Safe fallback
+      }
       let isClosed = false;
       return {
         engine: 'better-sqlite3',
@@ -575,8 +589,15 @@ export function searchMemoriesLightweight(
     params.push(options.namespace);
   }
 
-  // Token matching (title or content LIKE)
-  const likeClauses = tokens.map(() => '(title LIKE ? OR content LIKE ?)').join(' OR ');
+  // Token matching: use tr_lower for engines that registered it, fallback to standard LIKE
+  const hasTrLower = adapter.engine === 'better-sqlite3' || adapter.engine === 'bun:sqlite';
+  const likeClauses = tokens
+    .map(() =>
+      hasTrLower
+        ? '(tr_lower(title) LIKE ? OR tr_lower(content) LIKE ?)'
+        : '(title LIKE ? OR content LIKE ?)',
+    )
+    .join(' OR ');
   conditions.push(`(${likeClauses})`);
   for (const t of tokens) {
     params.push(`%${t}%`, `%${t}%`);
@@ -972,8 +993,43 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
         // Filter out any memories that the user explicitly muted for this session in the sidebar
         const eligibleRows = mutedIds.size > 0 ? rows.filter((r) => !mutedIds.has(r.id)) : rows;
 
-        const ranked = rankMemories(eligibleRows, tokens, 3);
-        const recallBlock = formatRecall(ranked);
+        let ranked: ScoredMemoryRow[] = rankMemories(eligibleRows, tokens, 5);
+
+        // Optional two-stage GPU reranking if mcp-memory-reranker service is active
+        try {
+          const localRerankUrl = process.env.MCP_MEMORY_RERANKER_URL || 'http://127.0.0.1:8765/rerank';
+          if (ranked.length > 0) {
+            const resp = await fetch(localRerankUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query: fullPrompt,
+                documents: ranked.map((r) => (r.title ? r.title + '\n' : '') + (r.content || '')),
+              }),
+              signal: AbortSignal.timeout(600),
+            });
+            if (resp.ok) {
+              const data = (await resp.json()) as {
+                results?: Array<{ index: number; score: number; logit: number }>;
+              };
+              if (Array.isArray(data?.results) && data.results.length === ranked.length) {
+                const reranked: ScoredMemoryRow[] = [];
+                for (const item of data.results) {
+                  const orig = ranked[item.index];
+                  if (item.logit > -5.0 && item.score > 0.005) {
+                    orig.similarity = item.score;
+                    reranked.push(orig);
+                  }
+                }
+                ranked = reranked.slice(0, 3);
+              }
+            }
+          }
+        } catch {
+          // Graceful fallback to keyword rank if reranker is not reachable
+        }
+
+        const recallBlock = formatRecall(ranked.slice(0, 3));
         if (recallBlock) {
           const refPart = output.parts[0] as any;
           const messageID = refPart?.messageID || hookInput?.messageID || '';

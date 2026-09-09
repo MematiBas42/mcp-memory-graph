@@ -79,6 +79,7 @@ export class CrossEncoderReranker implements Reranker {
     const isTestStub = this.modelName === 'stub-reranker';
     if (!isTestStub) {
       try {
+        const timeoutMs = Math.max(1500, docs.length * 100);
         const resp = await fetch(localRerankUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -86,7 +87,7 @@ export class CrossEncoderReranker implements Reranker {
             query: _query,
             documents: docs.map((d) => d.text),
           }),
-          signal: AbortSignal.timeout(1500),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (resp.ok) {
           const data = (await resp.json()) as { results?: Array<{ index: number; score: number; logit: number }> };

@@ -62,11 +62,12 @@ const TECH_3_CHARS = new Set([
 
 /**
  * Safely lowercase a string respecting Turkish dotted/dotless I characters
- * before falling back to Unicode default lowercasing.
+ * and developer acronyms (API, CLI, UI, GIT, etc.) by canonically normalizing
+ * to standard ASCII 'i'.
  */
 export function trLowerCase(str: string): string {
   if (!str) return '';
-  return str.replace(/İ/g, 'i').replace(/I/g, 'ı').toLowerCase().normalize('NFC');
+  return str.replace(/[İIı]/gu, 'i').toLowerCase().normalize('NFC');
 }
 
 /** 
@@ -254,16 +255,16 @@ async function main(): Promise<void> {
             const reranked: ScoredMemoryRow[] = [];
             for (const item of data.results) {
               const orig = ranked[item.index];
-              // Filter out extreme distractors (logit < -5.0 or score < 0.005)
-              if (item.logit > -5.0 || item.score > 0.005) {
+              // Filter out extreme distractors (logit <= -5.0 or score <= 0.005)
+              if (item.logit > -5.0 && item.score > 0.005) {
                 orig.similarity = item.score;
                 reranked.push(orig);
               }
             }
-            if (reranked.length > 0) {
-              ranked = reranked.slice(0, 3);
-              rerankSuccess = true;
-            }
+            // Always set ranked to reranked and mark success so complete distractor sets
+            // do not fall back to dumping unfiltered keyword matches.
+            ranked = reranked.slice(0, 3);
+            rerankSuccess = true;
           }
         }
       } catch {
@@ -280,6 +281,9 @@ async function main(): Promise<void> {
             model: process.env.MCP_MEMORY_MODEL || 'bge-m3',
             dimensions: parseInt(process.env.MCP_MEMORY_DIMENSIONS || '1024', 10),
             baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+            timeoutMs: 1500,
+            fetchImpl: (url, init) =>
+              fetch(url, { ...init, signal: AbortSignal.timeout(1500) }),
           });
           
           // Timeout semantic check strictly at 1.5s so it never hangs the CLI
@@ -342,5 +346,7 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
-  main().catch(() => process.exit(0));
+  main()
+    .then(() => process.exit(0))
+    .catch(() => process.exit(0));
 }

@@ -23,6 +23,8 @@ export interface OllamaProviderOptions {
   dimensions: number;
   /** Ollama base URL. Defaults to the local daemon. */
   baseUrl?: string;
+  /** Request timeout in milliseconds. Defaults to 30000ms. */
+  timeoutMs?: number;
   /** Injected fetch (tests pass a mock; production passes global `fetch`). */
   fetchImpl?: typeof fetch;
 }
@@ -39,6 +41,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   readonly dimensions: number;
 
   private readonly baseUrl: string;
+  private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private ready = false;
 
@@ -46,6 +49,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     this.modelName = opts.model;
     this.dimensions = opts.dimensions;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.timeoutMs = opts.timeoutMs ?? 30000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
@@ -83,6 +87,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
         // Matryoshka: ask the daemon to emit exactly our DB dimension.
         dimensions: this.dimensions,
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
