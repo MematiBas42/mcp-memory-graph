@@ -231,51 +231,91 @@ async function main(): Promise<void> {
       process.exit(0);
     }
 
-    // 3. Fast Semantic Verification (Ollama only, skipped if missing)
+    // 3. Fast Semantic / GPU Rerank Verification
     try {
-      const isOllama = process.env.MCP_MEMORY_PROVIDER === 'ollama' || 
-                       (process.env.MCP_MEMORY_MODEL && !process.env.MCP_MEMORY_PROVIDER);
-      if (isOllama) {
-        // Fast HTTP check without loading ONNX
-        const provider = new OllamaEmbeddingProvider({
-          model: process.env.MCP_MEMORY_MODEL || 'bge-m3',
-          dimensions: parseInt(process.env.MCP_MEMORY_DIMENSIONS || '1024', 10),
-          baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+      // 3.A Fast GPU Reranker Path (if mcp-memory-reranker is alive)
+      const localRerankUrl = process.env.MCP_MEMORY_RERANKER_URL || 'http://127.0.0.1:8765/rerank';
+      let rerankSuccess = false;
+      try {
+        const resp = await fetch(localRerankUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: prompt,
+            documents: ranked.map((r) => (r.title ? r.title + '\n' : '') + (r.content || '')),
+          }),
+          signal: AbortSignal.timeout(600),
         });
-        
-        // Timeout semantic check strictly at 1.5s so it never hangs the CLI
-        const promptVecPromise = provider.embed(prompt);
-        const timeoutPromise = new Promise<null>((r) => setTimeout(() => r(null), 1500));
-        const promptVec = await Promise.race([promptVecPromise, timeoutPromise]);
-        
-        if (promptVec) {
-          const pVec = new Float32Array(promptVec);
-          const finalRanked: ScoredMemoryRow[] = [];
-          
-          for (const cand of ranked) {
-            try {
-              // Load vector from SQLite
-              const vecRow = db.prepare('SELECT embedding FROM memories_vec WHERE memory_id = ?').get(cand.id) as { embedding: Buffer } | undefined;
-              
-              if (vecRow && vecRow.embedding) {
-                const cVec = new Float32Array(vecRow.embedding.buffer, vecRow.embedding.byteOffset, vecRow.embedding.length / 4);
-                const similarity = computeCosineSimilarity(pVec, cVec);
-                
-                // Keep only those with reasonable semantic overlap (> 0.55 threshold)
-                // We use a moderate threshold because prompt vectors are short/conversational
-                // while memory vectors are large/descriptive.
-                if (similarity > 0.55) {
-                  cand.similarity = similarity;
-                  finalRanked.push(cand);
-                }
-              } else {
-                finalRanked.push(cand); // Fallback if no vector
+        if (resp.ok) {
+          const data = (await resp.json()) as {
+            results?: Array<{ index: number; score: number; logit: number }>;
+          };
+          if (Array.isArray(data?.results) && data.results.length === ranked.length) {
+            const reranked: ScoredMemoryRow[] = [];
+            for (const item of data.results) {
+              const orig = ranked[item.index];
+              // Filter out extreme distractors (logit < -5.0 or score < 0.005)
+              if (item.logit > -5.0 || item.score > 0.005) {
+                orig.similarity = item.score;
+                reranked.push(orig);
               }
-            } catch (err) {
-              finalRanked.push(cand); // Fallback on db error
+            }
+            if (reranked.length > 0) {
+              ranked = reranked.slice(0, 3);
+              rerankSuccess = true;
             }
           }
-          ranked = finalRanked.sort((a, b) => (b.similarity || 0) - (a.similarity || 0)).slice(0, 3);
+        }
+      } catch {
+        // Fallback to Ollama embedding check if reranker is inactive
+      }
+
+      // 3.B Ollama Embedding Fallback (if reranker was not used)
+      if (!rerankSuccess) {
+        const isOllama = process.env.MCP_MEMORY_PROVIDER === 'ollama' || 
+                         (process.env.MCP_MEMORY_MODEL && !process.env.MCP_MEMORY_PROVIDER);
+        if (isOllama) {
+          // Fast HTTP check without loading ONNX
+          const provider = new OllamaEmbeddingProvider({
+            model: process.env.MCP_MEMORY_MODEL || 'bge-m3',
+            dimensions: parseInt(process.env.MCP_MEMORY_DIMENSIONS || '1024', 10),
+            baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+          });
+          
+          // Timeout semantic check strictly at 1.5s so it never hangs the CLI
+          const promptVecPromise = provider.embed(prompt);
+          const timeoutPromise = new Promise<null>((r) => setTimeout(() => r(null), 1500));
+          const promptVec = await Promise.race([promptVecPromise, timeoutPromise]);
+          
+          if (promptVec) {
+            const pVec = new Float32Array(promptVec);
+            const finalRanked: ScoredMemoryRow[] = [];
+            
+            for (const cand of ranked) {
+              try {
+                // Load vector from SQLite
+                const vecRow = db.prepare('SELECT embedding FROM memories_vec WHERE memory_id = ?').get(cand.id) as { embedding: Buffer } | undefined;
+                
+                if (vecRow && vecRow.embedding) {
+                  const cVec = new Float32Array(vecRow.embedding.buffer, vecRow.embedding.byteOffset, vecRow.embedding.length / 4);
+                  const similarity = computeCosineSimilarity(pVec, cVec);
+                  
+                  // Keep only those with reasonable semantic overlap (> 0.55 threshold)
+                  // We use a moderate threshold because prompt vectors are short/conversational
+                  // while memory vectors are large/descriptive.
+                  if (similarity > 0.55) {
+                    cand.similarity = similarity;
+                    finalRanked.push(cand);
+                  }
+                } else {
+                  finalRanked.push(cand); // Fallback if no vector
+                }
+              } catch (err) {
+                finalRanked.push(cand); // Fallback on db error
+              }
+            }
+            ranked = finalRanked.sort((a, b) => (b.similarity || 0) - (a.similarity || 0)).slice(0, 3);
+          }
         }
       }
     } catch (err) {
