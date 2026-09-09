@@ -1061,6 +1061,141 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       expect(mockApi._eventListeners["message.updated"]).toHaveLength(0);
       expect(mockApi._eventListeners["session.prompt"]).toHaveLength(0);
       expect(mockApi._eventListeners["session.idle"]).toHaveLength(0);
+      expect(mockApi._eventListeners["session.updated"]).toHaveLength(0);
+      expect(mockApi._eventListeners["message.part.inserted"]).toHaveLength(0);
+      expect(mockApi._eventListeners["message.part.updated"]).toHaveLength(0);
+    });
+
+    it("reactively refreshes prompt status on user message, message parts, session.updated, and scheduled delayed session.prompt ticks", () => {
+      vi.useFakeTimers();
+      try {
+        const sid = "session-reactive-test";
+        const db = new Database(tempDbPath);
+        db.exec(`
+          CREATE TABLE memories (
+            id TEXT PRIMARY KEY,
+            parent_id TEXT,
+            superseded_at TEXT,
+            tx_expired TEXT,
+            title TEXT,
+            content TEXT
+          );
+          INSERT INTO memories VALUES
+            ('m-1', null, null, null, 'Active 1', 'Content 1');
+        `);
+        db.close();
+
+        saveSessionState(sid, {
+          enabled: true,
+          mutedIds: [],
+          lastRecall: null,
+          history: [],
+        });
+
+        const mockApi = createMockApi();
+        let cleanupHook: (() => void) | null = null;
+        const solid = {
+          createElement: (type: string) => createMockNode(type),
+          spread: (node: any, props: any) => {
+            const desc = Object.getOwnPropertyDescriptors(props);
+            Object.defineProperties(node.props, desc);
+          },
+          createSignal: (val: any) => {
+            let curr = val;
+            return [
+              () => curr,
+              (next: any) => {
+                curr = typeof next === "function" ? next(curr) : next;
+                return curr;
+              },
+            ];
+          },
+          onCleanup: (fn: any) => {
+            cleanupHook = fn;
+          },
+        };
+
+        const promptNode = createMemoryPromptStatus(mockApi, solid, { session_id: sid });
+        expect(promptNode.props.content).toBe("0 🧠 1");
+
+        // 1. Verify all event listeners are registered
+        expect(mockApi.event.on).toHaveBeenCalledWith("message.updated", expect.any(Function));
+        expect(mockApi.event.on).toHaveBeenCalledWith("message.part.inserted", expect.any(Function));
+        expect(mockApi.event.on).toHaveBeenCalledWith("message.part.updated", expect.any(Function));
+        expect(mockApi.event.on).toHaveBeenCalledWith("session.prompt", expect.any(Function));
+        expect(mockApi.event.on).toHaveBeenCalledWith("session.updated", expect.any(Function));
+        expect(mockApi.event.on).toHaveBeenCalledWith("session.idle", expect.any(Function));
+
+        // 2. message.updated with non-completed user message triggers immediate refresh
+        const db2 = new Database(tempDbPath);
+        db2.prepare("INSERT INTO memories VALUES ('m-2', null, null, null, 'Active 2', 'Content 2')").run();
+        db2.close();
+        mockApi.event.emit("message.updated", {
+          properties: { info: { role: "user" } }, // not completed
+        });
+        expect(promptNode.props.content).toBe("0 🧠 2");
+
+        // 3. message.part.inserted triggers refresh
+        const db3 = new Database(tempDbPath);
+        db3.prepare("INSERT INTO memories VALUES ('m-3', null, null, null, 'Active 3', 'Content 3')").run();
+        db3.close();
+        mockApi.event.emit("message.part.inserted", {});
+        expect(promptNode.props.content).toBe("0 🧠 3");
+
+        // 4. message.part.updated triggers refresh
+        const db4 = new Database(tempDbPath);
+        db4.prepare("INSERT INTO memories VALUES ('m-4', null, null, null, 'Active 4', 'Content 4')").run();
+        db4.close();
+        mockApi.event.emit("message.part.updated", {});
+        expect(promptNode.props.content).toBe("0 🧠 4");
+
+        // 5. session.updated triggers refresh
+        const db5 = new Database(tempDbPath);
+        db5.prepare("INSERT INTO memories VALUES ('m-5', null, null, null, 'Active 5', 'Content 5')").run();
+        db5.close();
+        mockApi.event.emit("session.updated", {});
+        expect(promptNode.props.content).toBe("0 🧠 5");
+
+        // 6. session.prompt triggers immediate refresh AND schedules 100ms and 300ms delayed refreshes
+        mockApi.event.emit("session.prompt");
+        // Update session state simulated at 50ms (plugin writes to disk)
+        saveSessionState(sid, {
+          enabled: true,
+          mutedIds: [],
+          lastRecall: {
+            ts: "2026-09-09T12:00:00Z",
+            tokens: ["fast"],
+            matches: [{ id: "m-1", title: "Fast", snippet: "...", importance_score: 1 }],
+          },
+          history: [{ id: "m-1", title: "Fast", snippet: "...", importance_score: 1 }],
+        });
+
+        // Before timers advance, session state was not yet re-read
+        expect(promptNode.props.content).toBe("0 🧠 5");
+
+        // Advance 100ms: first delayed refresh fires and picks up the disk state!
+        vi.advanceTimersByTime(100);
+        expect(promptNode.props.content).toBe("1 🧠 5");
+        expect(promptNode.props.fg).toBe(mockApi.theme.current.warning);
+
+        // Advance further to 300ms: second delayed refresh runs safely
+        vi.advanceTimersByTime(200);
+        expect(promptNode.props.content).toBe("1 🧠 5");
+
+        // 7. Cleanup disposes all listeners and clears active timers
+        mockApi.event.emit("session.prompt"); // schedules new timers
+        expect(cleanupHook).toBeDefined();
+        cleanupHook!();
+
+        expect(mockApi._eventListeners["message.updated"]).toHaveLength(0);
+        expect(mockApi._eventListeners["message.part.inserted"]).toHaveLength(0);
+        expect(mockApi._eventListeners["message.part.updated"]).toHaveLength(0);
+        expect(mockApi._eventListeners["session.prompt"]).toHaveLength(0);
+        expect(mockApi._eventListeners["session.updated"]).toHaveLength(0);
+        expect(mockApi._eventListeners["session.idle"]).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -134,6 +134,13 @@ describe('OpenCode Memory Plugin', () => {
       )
       .run();
 
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: [{ index: 0, score: 0.9, logit: 2.5 }],
+      }),
+    } as Response);
+
     const plugin = await opencodeMemoryPlugin({
       client: {},
       project: {},
@@ -154,6 +161,7 @@ describe('OpenCode Memory Plugin', () => {
     expect(output.parts[0].text).toContain('Payment gateway deployment #4821');
     expect(output.parts[1].text).toBe('Please continue the #4821 payment gateway deployment');
 
+    fetchSpy.mockRestore();
     await plugin.dispose!();
   });
 

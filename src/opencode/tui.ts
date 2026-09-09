@@ -220,18 +220,53 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
 
   refreshPrompt();
 
-  const disposeMessage = api.event?.on?.("message.updated", (e: any) => {
-    if (e.properties?.info?.time?.completed) {
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const scheduleRefresh = (delayMs: number) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
       refreshPrompt();
+    }, delayMs);
+    timers.add(timer);
+  };
+
+  const disposes: (() => void)[] = [];
+  const addListener = (event: string, handler: (e: any) => void) => {
+    const dispose = api.event?.on?.(event, handler);
+    if (typeof dispose === "function") {
+      disposes.push(dispose);
     }
+  };
+
+  // 1. message.updated: Trigger immediate refresh on every update (e.g. user message or completed)
+  addListener("message.updated", (_e: any) => {
+    refreshPrompt();
   });
-  const disposeIdle = api.event?.on?.("session.idle", () => refreshPrompt());
-  const disposePrompt = api.event?.on?.("session.prompt", () => refreshPrompt());
+
+  // 2. message.part.inserted / message.part.updated: Trigger immediate refresh
+  addListener("message.part.inserted", () => refreshPrompt());
+  addListener("message.part.updated", () => refreshPrompt());
+
+  // 3. session.prompt: User hit Enter. Immediate refresh + short delayed refreshes (100ms, 300ms)
+  // to catch background plugin.ts GPU reranker recall writing to disk.
+  addListener("session.prompt", () => {
+    refreshPrompt();
+    scheduleRefresh(100);
+    scheduleRefresh(300);
+  });
+
+  // 4. session.updated & session.idle
+  addListener("session.updated", () => refreshPrompt());
+  addListener("session.idle", () => refreshPrompt());
 
   solid.onCleanup?.(() => {
-    if (disposeMessage) disposeMessage();
-    if (disposeIdle) disposeIdle();
-    if (disposePrompt) disposePrompt();
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+    timers.clear();
+    for (const dispose of disposes) {
+      dispose();
+    }
+    disposes.length = 0;
   });
 
   const node = solid.createElement("text");
