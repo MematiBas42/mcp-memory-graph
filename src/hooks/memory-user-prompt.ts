@@ -53,6 +53,22 @@ export interface ScoredMemoryRow extends MemoryRow {
   similarity?: number;
 }
 
+/** Common 3-character technical terms allowed as tokens. */
+const TECH_3_CHARS = new Set([
+  'api', 'sql', 'gpu', 'cpu', 'ram', 'git', 'mac', 'web', 'app', 'jwt',
+  'tui', 'mcp', 'cli', 'ssh', 'lan', 'log', 'bug', 'env', 'dns', 'ssl',
+  'tls', 'tcp', 'udp', 'dom', 'css', 'csv', 'pr', 'npm',
+]);
+
+/**
+ * Safely lowercase a string respecting Turkish dotted/dotless I characters
+ * before falling back to Unicode default lowercasing.
+ */
+export function trLowerCase(str: string): string {
+  if (!str) return '';
+  return str.replace(/İ/g, 'i').replace(/I/g, 'ı').toLowerCase().normalize('NFC');
+}
+
 /** 
  * Pull searchable tokens from the prompt: 4-7 digit ids + words >= 4 chars.
  * Uses full Unicode matching to prevent swallowing Turkish characters (ç,ğ,ı,ö,ş,ü).
@@ -62,12 +78,10 @@ export function tokenize(prompt: string): string[] {
   // ticket/PR ids
   for (const m of prompt.matchAll(/\b\d{4,7}\b/g)) tokens.add(m[0]);
   
-  // Unicode words >= 4 chars (ignoring case), plus common 3-char technical terms (API, SQL, GPU, etc.)
-  const tech3Chars = new Set(['api', 'sql', 'gpu', 'cpu', 'ram', 'git', 'mac', 'web', 'app', 'jwt', 'tui', 'mcp', 'cli']);
   for (const match of prompt.matchAll(/[\p{L}\p{N}_-]{3,}/gu)) {
-    const t = match[0].toLowerCase().normalize('NFC');
+    const t = trLowerCase(match[0]);
     if (!STOPWORDS.has(t)) {
-      if (t.length >= 4 || tech3Chars.has(t)) {
+      if (t.length >= 4 || TECH_3_CHARS.has(t)) {
         tokens.add(t);
       }
     }
@@ -78,10 +92,15 @@ export function tokenize(prompt: string): string[] {
 
 /**
  * Gate on task SIGNAL, not word-prefix.
+ * Allows single high-signal token (e.g. "Tell me about bge-m3" -> ["bge-m3"]).
  */
 export function shouldRecall(tokens: string[]): boolean {
   const hasId = tokens.some(t => /^\d{4,7}$/.test(t));
-  return hasId || tokens.length >= 2;
+  if (hasId || tokens.length >= 2) return true;
+  if (tokens.length === 1 && (tokens[0].length >= 5 || TECH_3_CHARS.has(tokens[0]))) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -93,20 +112,22 @@ export function escapeRegex(value: string): string {
 
 /**
  * Checks if a token matches as a distinct word inside the text,
- * respecting Unicode boundaries.
+ * respecting Unicode boundaries, hyphens, and Turkish case-folding.
  */
 export function matchWordBoundary(text: string, token: string): boolean {
   if (!text || !token) return false;
-  const escaped = escapeRegex(token);
+  const lowerText = trLowerCase(text);
+  const lowerToken = trLowerCase(token);
+  const escaped = escapeRegex(lowerToken);
   try {
-    return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}([^\\p{L}\\p{N}_]|$)`, 'iu').test(text);
+    return new RegExp(`(^|[^\\p{L}\\p{N}_-])${escaped}([^\\p{L}\\p{N}_-]|$)`, 'iu').test(lowerText);
   } catch {
-    return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(lowerText);
   }
 }
 
 /**
- * Score candidate rows in JS using STRICT word boundaries.
+ * Score candidate rows in JS using STRICT word boundaries and Turkish-aware normalization.
  */
 export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 5): ScoredMemoryRow[] {
   return rows
@@ -184,11 +205,16 @@ async function main(): Promise<void> {
   }
 
   const db = new DatabaseConstructor(dbPath, { readonly: true });
+  db.function('tr_lower', (s: unknown) => (typeof s === 'string' ? trLowerCase(s) : ''));
+
   try {
     // 1. Fetch wide net using LIKE
-    const likeClauses = tokens.map(() => '(title LIKE ? OR content LIKE ?)').join(' OR ');
+    // Using custom deterministic scalar tr_lower() so TitleCase words (Çilek, İşlem, etc.)
+    // match lowercase tokens seamlessly without duplicating clauses.
+    const clauses = tokens.map(() => '(tr_lower(title) LIKE ? OR tr_lower(content) LIKE ?)');
     const params: string[] = [];
     for (const t of tokens) params.push(`%${t}%`, `%${t}%`);
+    const likeClauses = clauses.length > 0 ? clauses.join(' OR ') : '1=0';
 
     const rows = db.prepare(
       `SELECT id, title, content, importance_score FROM memories
