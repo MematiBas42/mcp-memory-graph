@@ -355,7 +355,6 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     onMouseUp: () => {
       mainExpanded = !mainExpanded;
       accordion.main = mainExpanded;
-      updateHeaderText();
       syncMainVisibility();
     },
   });
@@ -391,7 +390,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
   safeAdd(headerBox, sessionToggleBox);
   safeAdd(rootBox, headerBox);
 
-  // 3. MAIN BODY CONTAINER
+  // 3. MAIN BODY CONTAINER (Permanently attached; visibility controlled by mainBodyBox.visible)
   const mainBodyBox = solid.createElement("box");
   solid.spread(mainBodyBox, {
     flexDirection: "column",
@@ -399,6 +398,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     gap: 0,
     paddingLeft: 1,
   });
+  safeAdd(rootBox, mainBodyBox);
 
   // ── Section 1: LAST RECALL ────────────────────────────────────────────────
   const lastRecallContainer = solid.createElement("box");
@@ -415,6 +415,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     width: "100%",
     paddingLeft: 1,
   });
+  safeAdd(lastRecallContainer, lastRecallBodyBox);
 
   const updateLastRecallHeader = () => {
     const lastMatches = currentSessionState.lastRecall?.matches ?? [];
@@ -428,11 +429,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
 
   const syncLastRecallVisibility = () => {
     updateLastRecallHeader();
-    if (lastRecallExpanded) {
-      safeAdd(lastRecallContainer, lastRecallBodyBox);
-    } else {
-      safeRemove(lastRecallContainer, lastRecallBodyBox);
-    }
+    lastRecallBodyBox.visible = lastRecallExpanded;
   };
 
   solid.spread(lastRecallHeaderBox, {
@@ -462,6 +459,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     width: "100%",
     paddingLeft: 1,
   });
+  safeAdd(historyContainer, historyBodyBox);
 
   const updateHistoryHeader = () => {
     const hist = currentSessionState.history || [];
@@ -475,11 +473,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
 
   const syncHistoryVisibility = () => {
     updateHistoryHeader();
-    if (historyExpanded) {
-      safeAdd(historyContainer, historyBodyBox);
-    } else {
-      safeRemove(historyContainer, historyBodyBox);
-    }
+    historyBodyBox.visible = historyExpanded;
   };
 
   solid.spread(historyHeaderBox, {
@@ -495,11 +489,8 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
   safeAdd(mainBodyBox, historyContainer);
 
   const syncMainVisibility = () => {
-    if (mainExpanded) {
-      safeAdd(rootBox, mainBodyBox);
-    } else {
-      safeRemove(rootBox, mainBodyBox);
-    }
+    updateHeaderText();
+    mainBodyBox.visible = mainExpanded;
   };
 
   // Helper to render an interactive memory row with local in-place mute updates
@@ -705,6 +696,25 @@ const moduleExport = {
       api.lifecycle.onDispose(disposeCommand);
     }
   },
+};
+
+export {
+  PLUGIN_ID,
+  getMemoryDbPath,
+  getMemoryCountFromSqlite,
+  getSessionStatePath,
+  readSessionState,
+  saveSessionState,
+  toggleSessionMemory,
+  toggleMemoryMute,
+  safeAdd,
+  safeRemove,
+  safeClear,
+  getAccordionState,
+  createMemoryPromptStatus,
+  showMemoryDetailDialog,
+  showMemoryStatsDialog,
+  createSidebarMemoryWidget,
 };
 
 export default moduleExport;
