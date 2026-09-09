@@ -74,17 +74,29 @@ export function MemoryDetail() {
   useEffect(() => {
     if (!id) return
     setLoading(true)
-    Promise.all([
+    Promise.allSettled([
       getMemory(id, true),
       getVersions(id),
       getRelated(id, 8),
     ])
-      .then(([memData, verData, relData]) => {
-        setMemory(memData.memory)
-        initEditState(memData.memory)
-        setVersions(verData.history)
-        setCurrentVersion(verData.current_version)
-        setRelated(relData.related)
+      .then(([memRes, verRes, relRes]) => {
+        if (memRes.status === "fulfilled") {
+          setMemory(memRes.value.memory)
+          initEditState(memRes.value.memory)
+        } else {
+          setMemory(null)
+        }
+        if (verRes.status === "fulfilled") {
+          setVersions(verRes.value.history)
+          setCurrentVersion(verRes.value.current_version)
+        } else {
+          setVersions([])
+        }
+        if (relRes.status === "fulfilled") {
+          setRelated(relRes.value.related)
+        } else {
+          setRelated([])
+        }
       })
       .finally(() => setLoading(false))
   }, [id])
