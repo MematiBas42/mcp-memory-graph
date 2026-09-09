@@ -302,6 +302,15 @@ export function createServer(): McpServer {
   // not a closed local operation.
   const OPEN_WORLD_TOOLS = new Set<string>(['memory_webhook']);
 
+  // When hosted under OpenCode (which automatically prepends the MCP server
+  // name as a namespace prefix, e.g. "memory_" + toolName), strip the redundant
+  // "memory_" prefix so the exposed tool becomes the canonical "memory_store",
+  // "memory_search", etc. instead of "memory_memory_store".
+  const shouldStripPrefix =
+    process.env.MCP_STRIP_TOOL_PREFIX === '1' ||
+    process.argv.includes('--strip-prefix') ||
+    process.argv.includes('--strip-tool-prefix');
+
   function reg<Args extends ZodRawShape>(
     name: string,
     description: string,
@@ -319,7 +328,11 @@ export function createServer(): McpServer {
     };
     if (READ_ONLY_TOOLS.has(name)) annotations.readOnlyHint = true;
     if (DESTRUCTIVE_TOOLS.has(name)) annotations.destructiveHint = true;
-    server.registerTool(name, { description, inputSchema, annotations }, handler);
+    const registeredName =
+      shouldStripPrefix && name.startsWith('memory_')
+        ? name.slice('memory_'.length)
+        : name;
+    server.registerTool(registeredName, { description, inputSchema, annotations }, handler);
   }
 
   // ── 1. memory_store ──────────────────────────────────────────────────────
