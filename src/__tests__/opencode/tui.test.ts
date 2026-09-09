@@ -933,6 +933,25 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       mockApi.event.emit("session.prompt");
       expect(promptNode.props.content).toBe("0 🧠 3");
       expect(promptNode.props.fg).toBe(mockApi.theme.current.textMuted);
+
+      // When sessionData is undefined or "global", recall count must be 0 and no yellow warning
+      saveSessionState("global", {
+        enabled: true,
+        mutedIds: [],
+        lastRecall: {
+          ts: "2026-09-09T10:00:00Z",
+          tokens: ["test"],
+          matches: [{ id: "m-1", title: "Test", snippet: "...", importance_score: 1 }],
+        },
+        history: [{ id: "m-1", title: "Test", snippet: "...", importance_score: 1 }],
+      });
+      const globalNodeNoData = createMemoryPromptStatus(mockApi, solid);
+      expect(globalNodeNoData.props.content).toBe("0 🧠 3");
+      expect(globalNodeNoData.props.fg).toBe(mockApi.theme.current.textMuted);
+
+      const globalNodeExplicit = createMemoryPromptStatus(mockApi, solid, { session_id: "global" });
+      expect(globalNodeExplicit.props.content).toBe("0 🧠 3");
+      expect(globalNodeExplicit.props.fg).toBe(mockApi.theme.current.textMuted);
     });
 
     it("responds to event bus updates and properly cleans up listeners onCleanup", () => {

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type Database from 'better-sqlite3';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { unlinkSync, existsSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
+import { unlinkSync, existsSync, readFileSync } from 'node:fs';
 import {
   opencodeMemoryPlugin,
   createDatabaseAdapter,
@@ -10,6 +10,7 @@ import {
   isRemoteConfigured,
   createNoopDatabaseAdapter,
   createRemoteDatabaseAdapter,
+  clearSessionLastRecall,
 } from '../../opencode/plugin.js';
 import { createDatabase } from '../../db/connection.js';
 import { initializeSchema } from '../../db/schema.js';
@@ -156,7 +157,7 @@ describe('OpenCode Memory Plugin', () => {
     await plugin.dispose!();
   });
 
-  it('ignores trivial prompts in chat.message', async () => {
+  it('ignores trivial prompts in chat.message and clears lastRecall', async () => {
     process.env.MCP_MEMORY_DB_PATH = tempDbPath;
     testDb = createDatabase(tempDbPath);
     initializeSchema(testDb);
@@ -168,13 +169,71 @@ describe('OpenCode Memory Plugin', () => {
       $: {},
     });
 
+    const sid = 'test-clear-lastrecall-session';
+    const sessionFile = join(homedir(), '.mcp-memory', 'sessions', `${sid}.json`);
+
+    // Pretend a previous recall existed
+    const saveOutput: ChatMessageOutput = {
+      parts: [{ type: 'text', text: 'Please continue the #4821 payment gateway deployment', sessionID: sid } as any],
+    };
+    testDb
+      .prepare(
+        `INSERT INTO memories (id, scope, namespace, title, content, importance_score, created_at, updated_at, valid_from)
+         VALUES ('mem-rec-clear', 'project', 'test-project', 'Payment gateway deployment #4821', 'Webhook notes', 0.95, datetime('now'), datetime('now'), datetime('now'))`,
+      )
+      .run();
+
+    await plugin['chat.message']!({ sessionID: sid }, saveOutput);
+
+    // Now send a trivial prompt with no recall
+    const trivialOutput: ChatMessageOutput = {
+      parts: [{ type: 'text', text: 'ok thanks', sessionID: sid } as any],
+    };
+
+    await plugin['chat.message']!({ sessionID: sid }, trivialOutput);
+    expect(trivialOutput.parts).toHaveLength(1);
+
+    if (existsSync(sessionFile)) {
+      const state = JSON.parse(readFileSync(sessionFile, 'utf-8'));
+      expect(state.lastRecall).toBeNull();
+    }
+
+    await plugin.dispose!();
+  });
+
+  it('does not inject unverified keyword matches when reranker fails', async () => {
+    process.env.MCP_MEMORY_DB_PATH = tempDbPath;
+    testDb = createDatabase(tempDbPath);
+    initializeSchema(testDb);
+
+    testDb
+      .prepare(
+        `INSERT INTO memories (id, scope, namespace, title, content, importance_score, created_at, updated_at, valid_from)
+         VALUES ('mem-keyword-only', 'project', 'test-project', 'Payment gateway deployment #4821', 'Webhook notes', 0.95, datetime('now'), datetime('now'), datetime('now'))`,
+      )
+      .run();
+
+    const plugin = await opencodeMemoryPlugin({
+      client: {},
+      project: {},
+      directory: '/tmp/test-project',
+      $: {},
+    });
+
+    // Mock fetch to simulate reranker failure / network error
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Reranker offline'));
+
     const output: ChatMessageOutput = {
-      parts: [{ type: 'text', text: 'ok thanks' }],
+      parts: [{ type: 'text', text: 'Please continue the #4821 payment gateway deployment' }],
     };
 
     await plugin['chat.message']!({}, output);
-    expect(output.parts).toHaveLength(1);
 
+    // Since reranker failed, raw keyword fallback is suppressed (ranked = [])
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0].text).toBe('Please continue the #4821 payment gateway deployment');
+
+    fetchSpy.mockRestore();
     await plugin.dispose!();
   });
 

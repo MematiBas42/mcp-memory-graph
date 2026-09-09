@@ -239,8 +239,10 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
     node,
     {
       get content() {
+        const rawSessionId = sessionData?.session_id;
+        const isActiveSession = Boolean(rawSessionId && rawSessionId !== "global");
         const s = sessionState();
-        const sessionRecallCount = s?.history?.length ?? 0;
+        const sessionRecallCount = isActiveSession ? (s?.history?.length ?? 0) : 0;
         const dbTotalCount = totalMemories();
         return `${sessionRecallCount} 🧠 ${dbTotalCount}`;
       },
@@ -249,6 +251,11 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
         const memoryMcp = mcpList.find((m: any) => m.name === "memory");
         if (memoryMcp && memoryMcp.status !== "connected") {
           return api.theme?.current?.error ?? "red";
+        }
+        const rawSessionId = sessionData?.session_id;
+        const isActiveSession = Boolean(rawSessionId && rawSessionId !== "global");
+        if (!isActiveSession) {
+          return api.theme?.current?.textMuted ?? "gray";
         }
         const s = sessionState();
         const hasRecall = (s?.lastRecall?.matches?.length ?? 0) > 0;

@@ -537,6 +537,26 @@ const TURKISH_STOPWORDS = new Set([
   'diye', 'gibi', 'bana', 'bunu', 'olan', 'olarak', 'tam', 'daha', 'hemen',
 ]);
 
+export function clearSessionLastRecall(sessionId: string, sessionStateDir?: string): void {
+  try {
+    const dir = sessionStateDir || join(homedir(), '.mcp-memory', 'sessions');
+    const safeId = (sessionId || 'global').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const p = join(dir, `${safeId}.json`);
+    if (existsSync(p)) {
+      let state: any = { enabled: true, history: [] };
+      try {
+        state = JSON.parse(readFileSync(p, 'utf-8'));
+      } catch {
+        state = { enabled: true, history: [] };
+      }
+      state.lastRecall = null;
+      writeFileSync(p, JSON.stringify(state, null, 2), 'utf-8');
+    }
+  } catch {
+    // safe ignore
+  }
+}
+
 export function tokenizeOpenCode(prompt: string): string[] {
   const base = tokenize(prompt);
   const extraTokens = new Set<string>(base);
@@ -795,6 +815,24 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
     }
   };
 
+  const clearSessionLastRecall = (sessionId: string): void => {
+    try {
+      const p = getSessionStatePath(sessionId);
+      if (existsSync(p)) {
+        let state: any = { enabled: true, history: [] };
+        try {
+          state = JSON.parse(readFileSync(p, 'utf-8'));
+        } catch {
+          state = { enabled: true, history: [] };
+        }
+        state.lastRecall = null;
+        writeFileSync(p, JSON.stringify(state, null, 2), 'utf-8');
+      }
+    } catch {
+      // safe ignore
+    }
+  };
+
   logBridge('plugin.initialized', {
     directory: input.directory,
   });
@@ -974,10 +1012,14 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           .map((p) => p.text as string);
 
         const fullPrompt = textParts.join('\n').trim();
-        if (!fullPrompt) return;
+        if (!fullPrompt) {
+          clearSessionLastRecall(sessionID);
+          return;
+        }
 
         const tokens = tokenizeOpenCode(fullPrompt);
         if (!shouldRecall(tokens) || activeAdapter.engine === 'noop' || activeAdapter.engine === 'remote-noop') {
+          clearSessionLastRecall(sessionID);
           return;
         }
 
@@ -1027,11 +1069,16 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
                   }
                 }
                 ranked = reranked.slice(0, 3);
+              } else {
+                ranked = [];
               }
+            } else {
+              ranked = [];
             }
           }
         } catch {
-          // Graceful fallback to keyword rank if reranker is not reachable
+          // Graceful fallback: when reranker fails or is unreachable, do not inject raw unverified keyword matches
+          ranked = [];
         }
 
         const recallBlock = formatRecall(ranked.slice(0, 3));
@@ -1064,6 +1111,7 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
             syntheticPartId,
           });
         } else {
+          clearSessionLastRecall(sessionID);
           logBridge('chat.message.no_match', { tokens });
         }
       } catch {
