@@ -854,6 +854,24 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
   describe("Prompt Bar Status Widget", () => {
     it("renders formatted recall counts and adjusts color based on MCP status and activity", () => {
       const sid = "session-prompt-test";
+      // Seed SQLite with 3 active memories
+      const db = new Database(tempDbPath);
+      db.exec(`
+        CREATE TABLE memories (
+          id TEXT PRIMARY KEY,
+          parent_id TEXT,
+          superseded_at TEXT,
+          tx_expired TEXT,
+          title TEXT,
+          content TEXT
+        );
+        INSERT INTO memories VALUES
+          ('m-1', null, null, null, 'Active 1', 'Content 1'),
+          ('m-2', null, null, null, 'Active 2', 'Content 2'),
+          ('m-3', null, null, null, 'Active 3', 'Content 3');
+      `);
+      db.close();
+
       saveSessionState(sid, {
         enabled: true,
         mutedIds: [],
@@ -866,16 +884,21 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       });
 
       const mockApi = createMockApi();
-      let signalVal: any = null;
       const solid = {
         createElement: (type: string) => createMockNode(type),
         spread: (node: any, props: any) => {
           const desc = Object.getOwnPropertyDescriptors(props);
           Object.defineProperties(node.props, desc);
         },
-        createSignal: (v: any) => {
-          signalVal = v;
-          return [() => signalVal, (next: any) => { signalVal = next; }];
+        createSignal: (val: any) => {
+          let curr = val;
+          return [
+            () => curr,
+            (next: any) => {
+              curr = typeof next === "function" ? next(curr) : next;
+              return curr;
+            },
+          ];
         },
         onCleanup: (fn: any) => cleanups.push(fn),
       };
@@ -883,31 +906,57 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       const promptNode = createMemoryPromptStatus(mockApi, solid, { session_id: sid });
 
       expect(promptNode.type).toBe("text");
-      // Format: "{lastMatches} 🧠 {totalMatches}"
-      expect(promptNode.props.content).toBe("1 🧠 1");
-      // When lastMatches > 0, fg should be warning
+      // Format: "${sessionRecallCount} 🧠 ${dbTotalCount}" -> history: 1, db: 3
+      expect(promptNode.props.content).toBe("1 🧠 3");
+      // When last message had recall (lastRecall.matches > 0), fg should be warning (yellow)
       expect(promptNode.props.fg).toBe(mockApi.theme.current.warning);
 
-      // When MCP status is disconnected, fg must be error
+      // When MCP status is disconnected, fg must be error (red)
       mockApi.state.mcp = () => [{ name: "memory", status: "disconnected" }];
       expect(promptNode.props.fg).toBe(mockApi.theme.current.error);
 
       // Restore MCP connection
       mockApi.state.mcp = () => [{ name: "memory", status: "connected" }];
 
-      // When lastMatches is 0, fg should be textMuted
+      // When last message had no recall, fg should be textMuted (gray)
+      saveSessionState(sid, {
+        enabled: true,
+        mutedIds: [],
+        history: [{ id: "m-1", title: "Test", snippet: "...", importance_score: 1 }],
+      });
+      mockApi.event.emit("session.prompt");
+      expect(promptNode.props.content).toBe("1 🧠 3");
+      expect(promptNode.props.fg).toBe(mockApi.theme.current.textMuted);
+
+      // When no recalls in session at all
       saveSessionState(sid, { enabled: true, mutedIds: [], history: [] });
-      signalVal = readSessionState(sid);
-      expect(promptNode.props.content).toBe("0 🧠 0");
+      mockApi.event.emit("session.prompt");
+      expect(promptNode.props.content).toBe("0 🧠 3");
       expect(promptNode.props.fg).toBe(mockApi.theme.current.textMuted);
     });
 
     it("responds to event bus updates and properly cleans up listeners onCleanup", () => {
       const sid = "session-prompt-events";
+      // Seed initial SQLite with 2 memories
+      const db = new Database(tempDbPath);
+      db.exec(`
+        CREATE TABLE memories (
+          id TEXT PRIMARY KEY,
+          parent_id TEXT,
+          superseded_at TEXT,
+          tx_expired TEXT,
+          title TEXT,
+          content TEXT
+        );
+        INSERT INTO memories VALUES
+          ('m-1', null, null, null, 'Active 1', 'Content 1'),
+          ('m-2', null, null, null, 'Active 2', 'Content 2');
+      `);
+      db.close();
+
       saveSessionState(sid, { enabled: true, mutedIds: [], history: [] });
 
       const mockApi = createMockApi();
-      let signalVal: any = null;
       let cleanupHook: (() => void) | null = null;
       const solid = {
         createElement: (type: string) => createMockNode(type),
@@ -915,12 +964,13 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
           const desc = Object.getOwnPropertyDescriptors(props);
           Object.defineProperties(node.props, desc);
         },
-        createSignal: (v: any) => {
-          signalVal = v;
+        createSignal: (val: any) => {
+          let curr = val;
           return [
-            () => signalVal,
+            () => curr,
             (next: any) => {
-              signalVal = typeof next === "function" ? next(signalVal) : next;
+              curr = typeof next === "function" ? next(curr) : next;
+              return curr;
             },
           ];
         },
@@ -930,14 +980,18 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       };
 
       const promptNode = createMemoryPromptStatus(mockApi, solid, { session_id: sid });
-      expect(promptNode.props.content).toBe("0 🧠 0");
+      expect(promptNode.props.content).toBe("0 🧠 2");
 
       // Verify listeners attached
       expect(mockApi.event.on).toHaveBeenCalledWith("message.updated", expect.any(Function));
       expect(mockApi.event.on).toHaveBeenCalledWith("session.prompt", expect.any(Function));
       expect(mockApi.event.on).toHaveBeenCalledWith("session.idle", expect.any(Function));
 
-      // Update state on disk and emit session.prompt
+      // Update state on disk: 1 memory in history & lastRecall, and add a memory to SQLite (2 -> 3)
+      const db2 = new Database(tempDbPath);
+      db2.prepare("INSERT INTO memories VALUES ('m-3', null, null, null, 'Active 3', 'Content 3')").run();
+      db2.close();
+
       saveSessionState(sid, {
         enabled: true,
         mutedIds: [],
@@ -950,9 +1004,14 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       });
 
       mockApi.event.emit("session.prompt");
-      expect(promptNode.props.content).toBe("1 🧠 1");
+      expect(promptNode.props.content).toBe("1 🧠 3");
+      expect(promptNode.props.fg).toBe(mockApi.theme.current.warning);
 
-      // Update state on disk and emit message.updated
+      // Update state on disk and emit message.updated: add another memory to SQLite (3 -> 4)
+      const db3 = new Database(tempDbPath);
+      db3.prepare("INSERT INTO memories VALUES ('m-4', null, null, null, 'Active 4', 'Content 4')").run();
+      db3.close();
+
       saveSessionState(sid, {
         enabled: true,
         mutedIds: [],
@@ -973,7 +1032,8 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
       mockApi.event.emit("message.updated", {
         properties: { info: { time: { completed: true } } },
       });
-      expect(promptNode.props.content).toBe("2 🧠 2");
+      expect(promptNode.props.content).toBe("2 🧠 4");
+      expect(promptNode.props.fg).toBe(mockApi.theme.current.warning);
 
       // Cleanup
       expect(cleanupHook).toBeDefined();

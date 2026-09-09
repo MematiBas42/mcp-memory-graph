@@ -211,9 +211,11 @@ function getAccordionState(sessionId: string): AccordionState {
 function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
   const sessionId = () => sessionData?.session_id || "global";
   const [sessionState, setSessionState] = solid.createSignal(readSessionState(sessionId()));
+  const [totalMemories, setTotalMemories] = solid.createSignal(getMemoryCountFromSqlite());
 
   const refreshPrompt = () => {
     setSessionState(readSessionState(sessionId()));
+    setTotalMemories(getMemoryCountFromSqlite());
   };
 
   refreshPrompt();
@@ -238,9 +240,9 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
     {
       get content() {
         const s = sessionState();
-        const lastCount = s?.lastRecall?.matches?.length ?? 0;
-        const totalCount = s?.history?.length ?? 0;
-        return `${lastCount} 🧠 ${totalCount}`;
+        const sessionRecallCount = s?.history?.length ?? 0;
+        const dbTotalCount = totalMemories();
+        return `${sessionRecallCount} 🧠 ${dbTotalCount}`;
       },
       get fg() {
         const mcpList = api.state?.mcp?.() ?? [];
@@ -249,8 +251,8 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
           return api.theme?.current?.error ?? "red";
         }
         const s = sessionState();
-        const lastCount = s?.lastRecall?.matches?.length ?? 0;
-        if (lastCount > 0) {
+        const hasRecall = (s?.lastRecall?.matches?.length ?? 0) > 0;
+        if (hasRecall) {
           return api.theme?.current?.warning ?? "yellow";
         }
         return api.theme?.current?.textMuted ?? "gray";
