@@ -1,28 +1,43 @@
 #!/usr/bin/env node
-// Claude Code UserPromptSubmit hook — task-aware memory recall.
+// Claude Code / OpenCode UserPromptSubmit hook — task-aware memory recall.
 //
 // SessionStart can only surface a GENERIC nudge (it fires before any prompt
 // exists). This hook fires WITH the prompt text, so it is the only place a
 // recall can be about the task the user just described. It keyword-searches the
-// memory DB and prints the top matching titles to stdout (which Claude Code
-// injects as context), nudging the agent to memory_search/memory_get the full
-// content BEFORE re-deriving work that is already captured.
+// memory DB and prints the top matching titles to stdout, nudging the agent to
+// memory_search/memory_get the full content BEFORE re-deriving work.
 //
-// Cheap by design: opens SQLite read-only, NO embedder, self-gates on trivial
-// prompts so it does not fire on "yes"/"ok"/"continue", and never hangs.
+// Upgraded to use exact Unicode word boundaries and optional semantic (Ollama)
+// verification to prevent hallucinated matches from substring overlapping.
 
 import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type BetterSqlite3 from 'better-sqlite3';
 import { resolveDbPath } from '../db/db-path.js';
 import { formatKeyLine } from './recall-format.js';
+import { getConfig } from '../config/loader.js';
+import { OllamaEmbeddingProvider } from '../embeddings/ollama.js';
 
-/** English/Danish stopwords stripped from the token set before searching. */
+/** Universal stopwords (English + Turkish + Conversational). */
 const STOPWORDS = new Set([
+  // English
   'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'you', 'your',
   'can', 'please', 'should', 'would', 'could', 'have', 'has', 'what', 'when',
   'where', 'which', 'about', 'make', 'made', 'use', 'using', 'look', 'looked',
-  'kan', 'skal', 'med', 'det', 'den', 'der', 'som', 'til', 'har', 'hvad',
+  'then', 'there', 'their', 'they', 'them', 'these', 'those', 'will', 'just',
+  'more', 'some', 'been', 'were', 'here', 'also', 'only', 'how', 'why', 'does',
+  'done', 'doing', 'want', 'need', 'give', 'take', 'come', 'find', 'tell', 'very',
+  'much', 'many', 'well', 'back', 'even', 'good', 'any', 'each', 'such',
+  'than', 'both', 'into', 'most', 'other', 'same', 'but',
+  // Turkish
+  'bir', 've', 'için', 'ile', 'bu', 'da', 'de', 'ise', 'olarak', 'gibi', 'olan',
+  'daha', 'nasıl', 'neden', 'ne', 'zaman', 'çok', 'en', 'kadar', 'sonra', 'göre',
+  'var', 'yok', 'mi', 'mı', 'mu', 'mü', 'şu', 'şöyle', 'böyle', 'bana', 'sana',
+  'onu', 'bunu', 'şunu', 'kendi', 'ilgili', 'hakkında', 'ya', 'ya da', 'veya',
+  // Conversational Fillers
+  'ok', 'yes', 'sure', 'continue', 'run', 'next', 'pass', 'skip', 'go', 'proceed',
+  'thanks', 'hello', 'hi', 'hey', 'bye', 'tamam', 'evet', 'hayır', 'devam', 'geç',
+  'hadi', 'sağol', 'teşekkürler', 'merhaba', 'selam', 'now', 'check', 'out',
 ]);
 
 export interface MemoryRow {
@@ -32,22 +47,37 @@ export interface MemoryRow {
   importance_score: number | null;
 }
 
-/** Pull searchable tokens from the prompt: 4-7 digit ids + words >= 4 chars. */
+export interface ScoredMemoryRow extends MemoryRow {
+  match: number;
+  score: number;
+  similarity?: number;
+}
+
+/** 
+ * Pull searchable tokens from the prompt: 4-7 digit ids + words >= 4 chars.
+ * Uses full Unicode matching to prevent swallowing Turkish characters (ç,ğ,ı,ö,ş,ü).
+ */
 export function tokenize(prompt: string): string[] {
   const tokens = new Set<string>();
-  for (const m of prompt.matchAll(/\d{4,7}/g)) tokens.add(m[0]); // ticket/PR ids
-  for (const w of prompt.toLowerCase().matchAll(/[a-zæøå][a-zæøå0-9_-]{3,}/gi)) {
-    const t = w[0];
-    if (!STOPWORDS.has(t)) tokens.add(t);
+  // ticket/PR ids
+  for (const m of prompt.matchAll(/\b\d{4,7}\b/g)) tokens.add(m[0]);
+  
+  // Unicode words >= 4 chars (ignoring case), plus common 3-char technical terms (API, SQL, GPU, etc.)
+  const tech3Chars = new Set(['api', 'sql', 'gpu', 'cpu', 'ram', 'git', 'mac', 'web', 'app', 'jwt', 'tui', 'mcp', 'cli']);
+  for (const match of prompt.matchAll(/[\p{L}\p{N}_-]{3,}/gu)) {
+    const t = match[0].toLowerCase().normalize('NFC');
+    if (!STOPWORDS.has(t)) {
+      if (t.length >= 4 || tech3Chars.has(t)) {
+        tokens.add(t);
+      }
+    }
   }
+  
   return [...tokens].slice(0, 8); // bound the LIKE fan-out
 }
 
 /**
- * Gate on task SIGNAL, not word-prefix: a prompt earns a recall if it carries an
- * id (ticket/PR) or >=2 meaningful tokens. Keeps "yes"/"ok"/"continue" silent
- * while still firing on "continue the #1234 deploy" — a prefix-based affirmation
- * filter wrongly gated the latter.
+ * Gate on task SIGNAL, not word-prefix.
  */
 export function shouldRecall(tokens: string[]): boolean {
   const hasId = tokens.some(t => /^\d{4,7}$/.test(t));
@@ -55,26 +85,42 @@ export function shouldRecall(tokens: string[]): boolean {
 }
 
 /**
- * Score candidate rows in JS: a title hit weighs more than a body hit,
- * importance breaks ties. The match floor (a title hit or >=2 body hits) stops a
- * high-importance memory from riding a single weak body-word onto every prompt.
+ * Escapes regex special characters to allow safe variable injection.
  */
-export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 3): MemoryRow[] {
+export function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Checks if a token matches as a distinct word inside the text,
+ * respecting Unicode boundaries.
+ */
+export function matchWordBoundary(text: string, token: string): boolean {
+  if (!text || !token) return false;
+  const escaped = escapeRegex(token);
+  try {
+    return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}([^\\p{L}\\p{N}_]|$)`, 'iu').test(text);
+  } catch {
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+  }
+}
+
+/**
+ * Score candidate rows in JS using STRICT word boundaries.
+ */
+export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 5): ScoredMemoryRow[] {
   return rows
     .map(r => {
-      const title = (r.title || '').toLowerCase();
-      const content = (r.content || '').toLowerCase();
       let match = 0; // token-derived relevance, importance excluded
       for (const t of tokens) {
-        if (title.includes(t)) match += 3;
-        if (content.includes(t)) match += 1;
+        if (matchWordBoundary(r.title || '', t)) match += 3;
+        if (matchWordBoundary(r.content || '', t)) match += 1;
       }
-      return { row: r, match, score: match + (r.importance_score ?? 0) };
+      return { ...r, match, score: match + (r.importance_score ?? 0) };
     })
     .filter(s => s.match >= 2)
     .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(s => s.row);
+    .slice(0, limit);
 }
 
 /** Render the recall block, or null when nothing titled survived ranking. */
@@ -86,8 +132,24 @@ export function formatRecall(memories: MemoryRow[]): string | null {
   return (
     `Possibly-relevant stored memories (search MCP before re-deriving this task):\n` +
     lines.join('\n') +
-    `\nRun memory_search / memory_get to load full content — MCP wins over file memory on conflict.\n`
+    `\nRun memory_search / memory_get to load full content — MCP wins over file memory on conflict.` +
+    `\nIf a recalled memory appears irrelevant or its title/scope is misleading (containing general keywords, not directing the scope), adjust it via memory_update based on its actual content.\n`
   );
+}
+
+// Compute cosine similarity between two Float32Arrays
+function computeCosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) return 0;
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 async function main(): Promise<void> {
@@ -123,13 +185,7 @@ async function main(): Promise<void> {
 
   const db = new DatabaseConstructor(dbPath, { readonly: true });
   try {
-    // No namespace filter: memories are often stored under an EXPLICIT namespace
-    // (e.g. a team or project name) that the cwd basename does not resolve to,
-    // so filtering by the resolved namespace silently hides them — the exact
-    // trap this hook exists to prevent. Rank by relevance across the local
-    // corpus and cap at 3; cross-project bleed is negligible at that size.
-    //
-    // Candidate pull is bounded so a vague prompt can never scan the whole corpus.
+    // 1. Fetch wide net using LIKE
     const likeClauses = tokens.map(() => '(title LIKE ? OR content LIKE ?)').join(' OR ');
     const params: string[] = [];
     for (const t of tokens) params.push(`%${t}%`, `%${t}%`);
@@ -142,7 +198,65 @@ async function main(): Promise<void> {
        LIMIT 200`
     ).all(...params) as MemoryRow[];
 
-    const block = formatRecall(rankMemories(rows, tokens));
+    // 2. Strict exact word boundary ranking
+    let ranked = rankMemories(rows, tokens, 5);
+    
+    if (ranked.length === 0) {
+      process.exit(0);
+    }
+
+    // 3. Fast Semantic Verification (Ollama only, skipped if missing)
+    try {
+      const isOllama = process.env.MCP_MEMORY_PROVIDER === 'ollama' || 
+                       (process.env.MCP_MEMORY_MODEL && !process.env.MCP_MEMORY_PROVIDER);
+      if (isOllama) {
+        // Fast HTTP check without loading ONNX
+        const provider = new OllamaEmbeddingProvider({
+          model: process.env.MCP_MEMORY_MODEL || 'bge-m3',
+          dimensions: parseInt(process.env.MCP_MEMORY_DIMENSIONS || '1024', 10),
+          baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+        });
+        
+        // Timeout semantic check strictly at 1.5s so it never hangs the CLI
+        const promptVecPromise = provider.embed(prompt);
+        const timeoutPromise = new Promise<null>((r) => setTimeout(() => r(null), 1500));
+        const promptVec = await Promise.race([promptVecPromise, timeoutPromise]);
+        
+        if (promptVec) {
+          const pVec = new Float32Array(promptVec);
+          const finalRanked: ScoredMemoryRow[] = [];
+          
+          for (const cand of ranked) {
+            try {
+              // Load vector from SQLite
+              const vecRow = db.prepare('SELECT embedding FROM memories_vec WHERE memory_id = ?').get(cand.id) as { embedding: Buffer } | undefined;
+              
+              if (vecRow && vecRow.embedding) {
+                const cVec = new Float32Array(vecRow.embedding.buffer, vecRow.embedding.byteOffset, vecRow.embedding.length / 4);
+                const similarity = computeCosineSimilarity(pVec, cVec);
+                
+                // Keep only those with reasonable semantic overlap (> 0.55 threshold)
+                // We use a moderate threshold because prompt vectors are short/conversational
+                // while memory vectors are large/descriptive.
+                if (similarity > 0.55) {
+                  cand.similarity = similarity;
+                  finalRanked.push(cand);
+                }
+              } else {
+                finalRanked.push(cand); // Fallback if no vector
+              }
+            } catch (err) {
+              finalRanked.push(cand); // Fallback on db error
+            }
+          }
+          ranked = finalRanked.sort((a, b) => (b.similarity || 0) - (a.similarity || 0)).slice(0, 3);
+        }
+      }
+    } catch (err) {
+      // Silently fall back to exact-match only if Ollama is unreachable
+    }
+
+    const block = formatRecall(ranked.slice(0, 3));
     if (block) process.stdout.write(block);
   } finally {
     db.close();
