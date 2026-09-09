@@ -5,6 +5,7 @@ import { dirname, resolve, basename, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { resolveDbPath } from '../db/db-path.js';
 import { resolveNamespace } from '../config/loader.js';
+import { parseJsonc } from '../cli/init-opencode.js';
 import { formatKeyLine } from '../hooks/recall-format.js';
 import {
   tokenize,
@@ -53,7 +54,209 @@ function interpolateSql(sql: string, params: unknown[] = []): string {
   });
 }
 
-export async function createDatabaseAdapter(dbPath: string): Promise<DatabaseAdapter | null> {
+/**
+ * Checks whether remote memory mode is configured via environment, config, or OpenCode settings.
+ */
+export function isRemoteConfigured(directory?: string): boolean {
+  if (process.env.MCP_MEMORY_REMOTE_URL || process.env.MCP_REMOTE_URL) {
+    return true;
+  }
+  if (process.env.MCP_MEMORY_MODE === 'remote') {
+    return true;
+  }
+
+  // Check mcp-memory config.json
+  try {
+    const cfgPath =
+      process.env.MCP_MEMORY_CONFIG_PATH ||
+      (directory && existsSync(join(directory, '.mcp-memory', 'config.json'))
+        ? join(directory, '.mcp-memory', 'config.json')
+        : join(homedir(), '.mcp-memory', 'config.json'));
+    if (existsSync(cfgPath)) {
+      const raw = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+      if (raw?.sharing?.remote_endpoint || raw?.sharing?.mode === 'team' || raw?.remote_endpoint) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Check OpenCode configs (project or user)
+  try {
+    const candidates = [
+      directory ? join(directory, 'opencode.jsonc') : null,
+      directory ? join(directory, 'opencode.json') : null,
+      directory ? join(directory, '.opencode', 'opencode.jsonc') : null,
+      directory ? join(directory, '.opencode', 'opencode.json') : null,
+      join(homedir(), '.config', 'opencode', 'opencode.jsonc'),
+      join(homedir(), '.config', 'opencode', 'opencode.json'),
+    ].filter(Boolean) as string[];
+
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        const raw = readFileSync(p, 'utf-8');
+        const parsed = parseJsonc(raw);
+        if (parsed?.mcp?.memory?.type === 'remote') {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
+}
+
+/**
+ * Retrieves the configured remote MCP endpoint URL and optional bearer token.
+ */
+export function getRemoteEndpoint(directory?: string): { url: string; token?: string } | null {
+  const envUrl = process.env.MCP_MEMORY_REMOTE_URL || process.env.MCP_REMOTE_URL;
+  if (envUrl) {
+    return { url: envUrl, token: process.env.MEMORY_MCP_TOKEN };
+  }
+
+  try {
+    const cfgPath =
+      process.env.MCP_MEMORY_CONFIG_PATH ||
+      (directory && existsSync(join(directory, '.mcp-memory', 'config.json'))
+        ? join(directory, '.mcp-memory', 'config.json')
+        : join(homedir(), '.mcp-memory', 'config.json'));
+    if (existsSync(cfgPath)) {
+      const raw = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+      if (raw?.sharing?.remote_endpoint) {
+        return { url: raw.sharing.remote_endpoint };
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const candidates = [
+      directory ? join(directory, 'opencode.jsonc') : null,
+      directory ? join(directory, 'opencode.json') : null,
+      directory ? join(directory, '.opencode', 'opencode.jsonc') : null,
+      directory ? join(directory, '.opencode', 'opencode.json') : null,
+      join(homedir(), '.config', 'opencode', 'opencode.jsonc'),
+      join(homedir(), '.config', 'opencode', 'opencode.json'),
+    ].filter(Boolean) as string[];
+
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        const raw = readFileSync(p, 'utf-8');
+        const parsed = parseJsonc(raw);
+        if (parsed?.mcp?.memory?.type === 'remote' && parsed?.mcp?.memory?.url) {
+          const authHeader = parsed.mcp.memory.headers?.Authorization;
+          let token: string | undefined;
+          if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+            token = authHeader.slice(7);
+          }
+          return { url: parsed.mcp.memory.url, token };
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/**
+ * Creates a safe no-op database adapter for remote mode when direct database access is skipped.
+ */
+export function createNoopDatabaseAdapter(engine: string = 'remote-noop'): DatabaseAdapter {
+  return {
+    engine,
+    queryAll: () => [],
+    queryGet: () => undefined,
+    close: () => {},
+  };
+}
+
+/**
+ * Creates a remote database adapter that communicates with a remote memory server REST endpoint.
+ */
+export function createRemoteDatabaseAdapter(remoteUrl: string, token?: string): DatabaseAdapter {
+  const baseUrl = remoteUrl.replace(/\/mcp\/?$/, '').replace(/\/+$/, '');
+  let isClosed = false;
+
+  let resolvedToken = token;
+  if (token && token.startsWith('{env:') && token.endsWith('}')) {
+    const envVar = token.slice(5, -1);
+    resolvedToken = process.env[envVar];
+  }
+
+  const queryAll = <T>(sql: string, params: unknown[] = []): T[] => {
+    if (isClosed) return [];
+    try {
+      const curlArgs = ['-s', '--max-time', '2'];
+      if (resolvedToken) {
+        curlArgs.push('-H', `Authorization: Bearer ${resolvedToken}`);
+      }
+
+      if (sql.includes('COUNT(*)')) {
+        const out = execFileSync(
+          'curl',
+          [...curlArgs, `${baseUrl}/api/stats`],
+          { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        const data = JSON.parse(out);
+        return [{ cnt: data.total_memories ?? 0 }] as unknown as T[];
+      }
+      if (sql.includes('memories') && params.length > 0) {
+        const term = String(params[0] || '').replace(/%/g, '');
+        const url = `${baseUrl}/api/search?q=${encodeURIComponent(term)}`;
+        const out = execFileSync(
+          'curl',
+          [...curlArgs, url],
+          { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+        const data = JSON.parse(out);
+        return (data.results ?? []) as unknown as T[];
+      }
+    } catch {
+      // safe ignore
+    }
+    return [];
+  };
+
+  const queryGet = <T>(sql: string, params: unknown[] = []): T | undefined => {
+    const rows = queryAll<T>(sql, params);
+    return rows.length > 0 ? rows[0] : undefined;
+  };
+
+  return {
+    engine: 'remote-client',
+    queryAll,
+    queryGet,
+    close(): void {
+      isClosed = true;
+    },
+  };
+}
+
+export async function createDatabaseAdapter(
+  dbPath: string,
+  options?: { isRemote?: boolean; remoteUrl?: string; token?: string },
+): Promise<DatabaseAdapter | null> {
+  const isRemote =
+    options?.isRemote ??
+    (process.env.MCP_MEMORY_MODE === 'remote' ||
+      Boolean(process.env.MCP_MEMORY_REMOTE_URL || process.env.MCP_REMOTE_URL));
+
+  if (isRemote) {
+    const remoteUrl =
+      options?.remoteUrl || process.env.MCP_MEMORY_REMOTE_URL || process.env.MCP_REMOTE_URL;
+    if (remoteUrl) {
+      return createRemoteDatabaseAdapter(remoteUrl, options?.token || process.env.MEMORY_MCP_TOKEN);
+    }
+    return createNoopDatabaseAdapter();
+  }
+
   const isFilePresent = existsSync(dbPath);
 
   // ── Katman 1: bun:sqlite (Bun runtime) ──────────────────────────────────
@@ -223,8 +426,9 @@ export async function createDatabaseAdapter(dbPath: string): Promise<DatabaseAda
 
   // ── Katman 3 (alt): REST API fallback (http://127.0.0.1:3100) ───────────
   // Only fallback to REST API if dbPath is default/standard or file exists but cannot be opened
+  // and NOT in remote mode
   const isDefaultDb = !process.env.MCP_MEMORY_DB_PATH && dbPath === resolveDbPath();
-  if (isFilePresent || isDefaultDb) {
+  if ((isFilePresent || isDefaultDb) && !isRemote) {
     try {
       const res = execFileSync('curl', ['-s', '--max-time', '1', 'http://127.0.0.1:3100/api/stats'], {
         encoding: 'utf-8',
@@ -332,6 +536,62 @@ export function tokenizeOpenCode(prompt: string): string[] {
   return [...extraTokens].slice(0, 8);
 }
 
+export interface LightweightSearchOptions {
+  scope?: string;
+  namespace?: string;
+  limit?: number;
+}
+
+/**
+ * Performs a fast, lightweight memory search across title and content tokens,
+ * enforcing tenancy rules (namespace isolation) and privacy guards (scope != 'user' by default).
+ */
+export function searchMemoriesLightweight(
+  adapter: DatabaseAdapter,
+  tokens: string[],
+  options?: LightweightSearchOptions,
+): MemoryRow[] {
+  if (!adapter || tokens.length === 0) return [];
+
+  const conditions: string[] = [
+    'parent_id IS NULL',
+    'superseded_at IS NULL',
+    'valid_to IS NULL',
+    'tx_expired IS NULL',
+  ];
+  const params: unknown[] = [];
+
+  // Scope filter: respect explicit scope, or enforce privacy guard (exclude user-scoped memories)
+  if (options?.scope) {
+    conditions.push('scope = ?');
+    params.push(options.scope);
+  } else {
+    conditions.push("scope != 'user'");
+  }
+
+  // Namespace filter: restrict to target namespace or global/empty namespace
+  if (options?.namespace) {
+    conditions.push('(namespace = ? OR namespace IS NULL OR namespace = \'\')');
+    params.push(options.namespace);
+  }
+
+  // Token matching (title or content LIKE)
+  const likeClauses = tokens.map(() => '(title LIKE ? OR content LIKE ?)').join(' OR ');
+  conditions.push(`(${likeClauses})`);
+  for (const t of tokens) {
+    params.push(`%${t}%`, `%${t}%`);
+  }
+
+  const limit = options?.limit ?? 50;
+  const sql = `SELECT id, title, content, importance_score FROM memories WHERE ${conditions.join(' AND ')} LIMIT ${limit}`;
+
+  try {
+    return adapter.queryAll<MemoryRow>(sql, params);
+  } catch {
+    return [];
+  }
+}
+
 export const opencodeMemoryPlugin: OpenCodePlugin = async (
   input: PluginInput,
 ): Promise<OpenCodeHooks> => {
@@ -339,7 +599,28 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
   let dbInitError: string | null = null;
   let adapterEngineName: string = 'none';
 
+  const cwd = input.directory || process.cwd();
+  if (!process.env.MCP_MEMORY_CONFIG_PATH && existsSync(join(cwd, '.mcp-memory', 'config.json'))) {
+    process.env.MCP_MEMORY_CONFIG_PATH = join(cwd, '.mcp-memory', 'config.json');
+  }
+
+  const isRemote = isRemoteConfigured(cwd);
+  const remoteEndpoint = isRemote ? getRemoteEndpoint(cwd) : null;
+
   const initAdapter = async (): Promise<DatabaseAdapter | null> => {
+    if (isRemote) {
+      if (remoteEndpoint?.url) {
+        adapter = createRemoteDatabaseAdapter(remoteEndpoint.url, remoteEndpoint.token);
+        adapterEngineName = adapter.engine;
+        dbInitError = null;
+        return adapter;
+      }
+      adapter = createNoopDatabaseAdapter();
+      adapterEngineName = adapter.engine;
+      dbInitError = null;
+      return adapter;
+    }
+
     try {
       const dbPath = resolveDbPath();
       if (!existsSync(dbPath)) {
@@ -348,7 +629,7 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           return null;
         }
       }
-      const created = await createDatabaseAdapter(dbPath);
+      const created = await createDatabaseAdapter(dbPath, { isRemote: false });
       if (created) {
         adapter = created;
         adapterEngineName = created.engine;
@@ -516,6 +797,12 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
       try {
         const cwd = input.directory || process.cwd();
 
+        if (activeAdapter.engine === 'remote-noop') {
+          output.system.push('Memory server: connected (remote mode)');
+          logBridge('system.transform', { isRemote: true, mode: 'remote-noop' });
+          return;
+        }
+
         // 1. Resolve namespace
         let namespace: string;
         try {
@@ -548,8 +835,10 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
                 const branchMemories = activeAdapter.queryAll<{ title: string | null }>(
                   `SELECT title FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL
                    AND valid_to IS NULL AND tx_expired IS NULL
+                   AND scope != 'user'
+                   AND (namespace = ? OR namespace IS NULL OR namespace = '')
                    AND (content LIKE ? OR title LIKE ?) ORDER BY importance_score DESC LIMIT 2`,
-                  [`%${part}%`, `%${part}%`],
+                  [namespace, `%${part}%`, `%${part}%`],
                 );
                 const titles = branchMemories.filter((m) => m.title).map((m) => `'${m.title}'`);
                 if (titles.length > 0) {
@@ -567,7 +856,12 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
         let totalCount = 0;
         try {
           const total = activeAdapter.queryGet<{ cnt: number }>(
-            'SELECT COUNT(*) as cnt FROM memories WHERE parent_id IS NULL',
+            `SELECT COUNT(*) as cnt FROM memories
+             WHERE parent_id IS NULL AND superseded_at IS NULL
+               AND valid_to IS NULL AND tx_expired IS NULL
+               AND scope != 'user'
+               AND (namespace = ? OR namespace IS NULL OR namespace = '')`,
+            [namespace],
           );
           totalCount = total?.cnt ?? 0;
         } catch {
@@ -580,8 +874,10 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           topMemories = activeAdapter.queryAll<{ id: string; title: string | null; content: string | null }>(
             `SELECT id, title, content FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL
              AND valid_to IS NULL AND tx_expired IS NULL
+             AND scope != 'user'
+             AND (namespace = ? OR namespace IS NULL OR namespace = '')
              ORDER BY (namespace = ?) DESC, importance_score DESC LIMIT 3`,
-            [namespace],
+            [namespace, namespace],
           );
         } catch {
           // Safe ignore query error
@@ -598,6 +894,7 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           }>(
             `SELECT scope, namespace, content FROM core_memory
               WHERE TRIM(content) != '' AND (namespace = ? OR namespace = '')
+                AND scope != 'user'
               ORDER BY (namespace = ?) DESC`,
             [namespace, namespace],
           );
@@ -658,22 +955,19 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
         const tokens = tokenizeOpenCode(fullPrompt);
         if (!shouldRecall(tokens)) return;
 
-        const likeClauses = tokens.map(() => '(title LIKE ? OR content LIKE ?)').join(' OR ');
-        const params: string[] = [];
-        for (const t of tokens) {
-          params.push(`%${t}%`, `%${t}%`);
+        const cwd = input.directory || process.cwd();
+        let namespace: string;
+        try {
+          namespace = resolveNamespace(cwd);
+        } catch {
+          namespace = basename(cwd) || '';
         }
 
         const mutedIds = getSessionMutedMemoryIds(sessionID);
 
-        const rows = activeAdapter.queryAll<MemoryRow>(
-          `SELECT id, title, content, importance_score FROM memories
-           WHERE parent_id IS NULL AND superseded_at IS NULL
-             AND valid_to IS NULL AND tx_expired IS NULL
-             AND (${likeClauses})
-           LIMIT 50`,
-          params,
-        );
+        const rows = searchMemoriesLightweight(activeAdapter, tokens, {
+          namespace,
+        });
 
         // Filter out any memories that the user explicitly muted for this session in the sidebar
         const eligibleRows = mutedIds.size > 0 ? rows.filter((r) => !mutedIds.has(r.id)) : rows;

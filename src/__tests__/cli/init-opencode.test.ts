@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import {
   getOpenCodePluginPath,
   buildOpenCodePluginLoader,
+  cleanOpenCodePluginConfig,
+  removeOpenCodePluginFromConfig,
   installOpenCodePlugin,
   getOpenCodeSkillDir,
   installOpenCodeSkill,
@@ -29,6 +31,39 @@ describe('OpenCode plugin loader', () => {
   it('normalizes Windows backslashes in path', () => {
     const loader = buildOpenCodePluginLoader('C:\\Users\\test\\dist\\opencode\\index.js');
     expect(loader).toContain('import plugin from "C:/Users/test/dist/opencode/index.js";');
+  });
+
+  it('includes MCP_MEMORY_CONFIG_PATH when projectConfigPath is supplied', () => {
+    const loader = buildOpenCodePluginLoader('/dist/opencode/index.js', '/my-proj/.mcp-memory/config.json');
+    expect(loader).toContain('if (!process.env.MCP_MEMORY_CONFIG_PATH)');
+    expect(loader).toContain('process.env.MCP_MEMORY_CONFIG_PATH = "/my-proj/.mcp-memory/config.json";');
+    expect(loader).toContain('import plugin from "/dist/opencode/index.js";');
+  });
+});
+
+describe('cleanOpenCodePluginConfig', () => {
+  it('removes standalone plugin block when mcp-memory-graph is the only entry', () => {
+    const raw = `{\n  "model": "gpt-4",\n  "plugin": [\n    "file:///home/user/.config/opencode/plugins/mcp-memory-graph.js"\n  ]\n}`;
+    const cleaned = cleanOpenCodePluginConfig(raw);
+    expect(cleaned).not.toContain('mcp-memory-graph.js');
+    expect(cleaned).not.toContain('"plugin"');
+    const parsed = parseJsonc(cleaned);
+    expect(parsed.model).toBe('gpt-4');
+    expect(parsed.plugin).toBeUndefined();
+  });
+
+  it('removes only mcp-memory-graph entry when other plugins exist', () => {
+    const raw = `{\n  "plugin": [\n    "other-plugin",\n    "file:///home/user/.config/opencode/plugins/mcp-memory-graph.js"\n  ]\n}`;
+    const cleaned = cleanOpenCodePluginConfig(raw);
+    expect(cleaned).not.toContain('mcp-memory-graph.js');
+    expect(cleaned).toContain('other-plugin');
+    const parsed = parseJsonc(cleaned);
+    expect(parsed.plugin).toEqual(['other-plugin']);
+  });
+
+  it('leaves config unchanged when mcp-memory-graph is not in plugin list', () => {
+    const raw = `{\n  "plugin": [\n    "other-plugin"\n  ]\n}`;
+    expect(cleanOpenCodePluginConfig(raw)).toBe(raw);
   });
 });
 
@@ -214,6 +249,39 @@ describe('filesystem integration (temporary directory)', () => {
       const content = readFileSync(written, 'utf-8');
       expect(content).toContain('import plugin from "/my/dist/opencode/index.js";');
       expect(content).toContain('export default plugin;');
+    } finally {
+      process.chdir(origCwd);
+    }
+  });
+
+  it('installOpenCodePlugin removes redundant plugin entry from existing opencode config', () => {
+    const origCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const configPath = join(tempDir, 'opencode.jsonc');
+      writeFileSync(
+        configPath,
+        JSON.stringify(
+          {
+            model: 'test-model',
+            plugin: ['./.opencode/plugins/mcp-memory-graph.js'],
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      );
+
+      installOpenCodePlugin('project', '/my/dist/opencode/index.js', '/my/project/.mcp-memory/config.json');
+
+      const configAfter = JSON.parse(readFileSync(configPath, 'utf-8'));
+      expect(configAfter.plugin).toBeUndefined();
+      expect(configAfter.model).toBe('test-model');
+
+      const pluginFile = join(tempDir, '.opencode', 'plugins', 'mcp-memory-graph.js');
+      expect(existsSync(pluginFile)).toBe(true);
+      const pluginContent = readFileSync(pluginFile, 'utf-8');
+      expect(pluginContent).toContain('process.env.MCP_MEMORY_CONFIG_PATH = "/my/project/.mcp-memory/config.json";');
     } finally {
       process.chdir(origCwd);
     }

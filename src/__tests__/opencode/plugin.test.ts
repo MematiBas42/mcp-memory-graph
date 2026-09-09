@@ -3,7 +3,14 @@ import type Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { unlinkSync, existsSync } from 'node:fs';
-import { opencodeMemoryPlugin, createDatabaseAdapter } from '../../opencode/plugin.js';
+import {
+  opencodeMemoryPlugin,
+  createDatabaseAdapter,
+  searchMemoriesLightweight,
+  isRemoteConfigured,
+  createNoopDatabaseAdapter,
+  createRemoteDatabaseAdapter,
+} from '../../opencode/plugin.js';
 import { createDatabase } from '../../db/connection.js';
 import { initializeSchema } from '../../db/schema.js';
 import type {
@@ -35,6 +42,9 @@ describe('OpenCode Memory Plugin', () => {
       }
     }
     delete process.env.MCP_MEMORY_DB_PATH;
+    delete process.env.MCP_MEMORY_MODE;
+    delete process.env.MCP_MEMORY_REMOTE_URL;
+    delete process.env.MCP_REMOTE_URL;
   });
 
   it('initializes hooks safely even when database does not exist', async () => {
@@ -247,6 +257,157 @@ describe('OpenCode Memory Plugin', () => {
       const nonExistent = join(tmpdir(), 'definitely-does-not-exist.db');
       const adapter = await createDatabaseAdapter(nonExistent);
       expect(adapter).toBeNull();
+    });
+  });
+
+  describe('searchMemoriesLightweight & Scope/Namespace Isolation', () => {
+    it('isolates memories by namespace and excludes user scope by default', async () => {
+      process.env.MCP_MEMORY_DB_PATH = tempDbPath;
+      testDb = createDatabase(tempDbPath);
+      initializeSchema(testDb);
+
+      // Memory in project namespace
+      testDb
+        .prepare(`
+        INSERT INTO memories (id, scope, namespace, title, content, importance_score, created_at, updated_at, valid_from)
+        VALUES ('mem-ns-1', 'project', 'client-alpha', 'Alpha Deployment Runbook', 'Deploying alpha release', 0.9, datetime('now'), datetime('now'), datetime('now'))
+      `)
+        .run();
+
+      // Memory in different namespace
+      testDb
+        .prepare(`
+        INSERT INTO memories (id, scope, namespace, title, content, importance_score, created_at, updated_at, valid_from)
+        VALUES ('mem-ns-2', 'project', 'client-beta', 'Beta Deployment Runbook', 'Deploying beta release', 0.9, datetime('now'), datetime('now'), datetime('now'))
+      `)
+        .run();
+
+      // Memory with user scope (private)
+      testDb
+        .prepare(`
+        INSERT INTO memories (id, scope, namespace, title, content, importance_score, created_at, updated_at, valid_from)
+        VALUES ('mem-user-1', 'user', 'client-alpha', 'Alpha Personal Notes', 'Deploying secret alpha notes', 0.9, datetime('now'), datetime('now'), datetime('now'))
+      `)
+        .run();
+
+      const adapter = await createDatabaseAdapter(tempDbPath);
+      expect(adapter).not.toBeNull();
+
+      // Search scoped to client-alpha
+      const resultsAlpha = searchMemoriesLightweight(adapter!, ['deploying'], {
+        namespace: 'client-alpha',
+      });
+
+      expect(resultsAlpha).toHaveLength(1);
+      expect(resultsAlpha[0].id).toBe('mem-ns-1');
+
+      // Search scoped to client-beta
+      const resultsBeta = searchMemoriesLightweight(adapter!, ['deploying'], {
+        namespace: 'client-beta',
+      });
+      expect(resultsBeta).toHaveLength(1);
+      expect(resultsBeta[0].id).toBe('mem-ns-2');
+
+      // User scope is only returned when explicitly requested
+      const resultsUser = searchMemoriesLightweight(adapter!, ['deploying'], {
+        scope: 'user',
+        namespace: 'client-alpha',
+      });
+      expect(resultsUser).toHaveLength(1);
+      expect(resultsUser[0].id).toBe('mem-user-1');
+
+      adapter!.close();
+    });
+
+    it('system.transform respects namespace and excludes foreign namespaces and user scope', async () => {
+      process.env.MCP_MEMORY_DB_PATH = tempDbPath;
+      testDb = createDatabase(tempDbPath);
+      initializeSchema(testDb);
+
+      testDb
+        .prepare(`
+        INSERT INTO memories (id, scope, namespace, title, content, importance_score, created_at, updated_at, valid_from)
+        VALUES
+          ('m1', 'project', 'proj-a', 'ProjA Guide', 'Guide content', 0.9, datetime('now'), datetime('now'), datetime('now')),
+          ('m2', 'project', 'proj-b', 'ProjB Guide', 'Guide content', 0.9, datetime('now'), datetime('now'), datetime('now')),
+          ('m3', 'user', 'proj-a', 'ProjA Private', 'Private content', 0.9, datetime('now'), datetime('now'), datetime('now'))
+      `)
+        .run();
+
+      const plugin = await opencodeMemoryPlugin({
+        client: {},
+        project: {},
+        directory: '/tmp/proj-a',
+        $: {},
+      });
+
+      const output: SystemTransformOutput = { system: [] };
+      await plugin['experimental.chat.system.transform']!({}, output);
+
+      expect(output.system.length).toBeGreaterThan(0);
+      const combined = output.system.join('\n');
+      expect(combined).toContain('Memory server: 1 memories');
+      expect(combined).toContain('ProjA Guide');
+      expect(combined).not.toContain('ProjB Guide');
+      expect(combined).not.toContain('ProjA Private');
+
+      await plugin.dispose!();
+    });
+  });
+
+  describe('Remote Mode Isolation', () => {
+    it('detects remote configuration from environment variables', () => {
+      expect(isRemoteConfigured()).toBe(false);
+
+      process.env.MCP_MEMORY_MODE = 'remote';
+      expect(isRemoteConfigured()).toBe(true);
+      delete process.env.MCP_MEMORY_MODE;
+
+      process.env.MCP_MEMORY_REMOTE_URL = 'https://remote.memory.local';
+      expect(isRemoteConfigured()).toBe(true);
+      delete process.env.MCP_MEMORY_REMOTE_URL;
+    });
+
+    it('createDatabaseAdapter returns noop or remote-client in remote mode and never queries local db', async () => {
+      const fakeDbPath = join(tmpdir(), 'should-never-be-opened.db');
+
+      const noopAdapter = await createDatabaseAdapter(fakeDbPath, { isRemote: true });
+      expect(noopAdapter).not.toBeNull();
+      expect(noopAdapter!.engine).toBe('remote-noop');
+      expect(noopAdapter!.queryAll('SELECT * FROM memories')).toEqual([]);
+      expect(noopAdapter!.queryGet('SELECT * FROM memories')).toBeUndefined();
+
+      const remoteAdapter = await createDatabaseAdapter(fakeDbPath, {
+        isRemote: true,
+        remoteUrl: 'https://remote.memory.local:3100',
+      });
+      expect(remoteAdapter).not.toBeNull();
+      expect(remoteAdapter!.engine).toBe('remote-client');
+      remoteAdapter!.close();
+    });
+
+    it('plugin operates safely in remote mode without local database', async () => {
+      process.env.MCP_MEMORY_MODE = 'remote';
+
+      const plugin = await opencodeMemoryPlugin({
+        client: {},
+        project: {},
+        directory: '/tmp/remote-proj',
+        $: {},
+      });
+
+      const output: SystemTransformOutput = { system: [] };
+      await plugin['experimental.chat.system.transform']!({}, output);
+      expect(output.system).toContain('Memory server: connected (remote mode)');
+
+      const chatOutput: ChatMessageOutput = {
+        parts: [{ type: 'text', text: 'deploy #1234 service' }],
+      };
+      await plugin['chat.message']!({}, chatOutput);
+      expect(chatOutput.parts).toHaveLength(1);
+
+      await plugin.dispose!();
+      delete process.env.MCP_MEMORY_MODE;
     });
   });
 });
