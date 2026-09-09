@@ -73,6 +73,11 @@ describe("OpenCode TUI Plugin", () => {
           error: "#ff0000",
         },
       },
+      ui: {
+        toast: vi.fn(),
+        dialog: { replace: vi.fn(), clear: vi.fn() },
+        DialogAlert: vi.fn(),
+      },
     };
 
     await tuiPlugin.tui(mockApi);
@@ -112,6 +117,57 @@ describe("OpenCode TUI Plugin", () => {
     const widget = sidebarReg.slots.sidebar_content({}, { session_id: "test-session" });
     expect(widget).toBeDefined();
     expect(widget.type).toBe("box");
+    expect(widget.props.width).toBe("100%");
+
+    // Verify widget tree structure (Header, Toggle Box, Main Body)
+    const children = widget.getChildren();
+    expect(children.length).toBeGreaterThanOrEqual(2);
+    const headerBox = children[0];
+    expect(headerBox.type).toBe("box");
+    expect(headerBox.props.flexDirection).toBe("row");
+
+    // Header has title box and toggle box
+    const headerChildren = headerBox.getChildren();
+    expect(headerChildren.length).toBe(2);
+    const titleBox = headerChildren[0];
+    const toggleBox = headerChildren[1];
+    expect(typeof titleBox.props.onMouseUp).toBe("function");
+    expect(typeof toggleBox.props.onMouseUp).toBe("function");
+
+    // Test clicking toggle box toggles session memory state
+    toggleBox.props.onMouseUp();
+    expect(mockApi.ui.toast).toHaveBeenCalled();
+
+    // Test clicking title box toggles main accordion without error
+    titleBox.props.onMouseUp();
+    titleBox.props.onMouseUp();
+
+    // Verify sub-sections stay intact when folded/unfolded
+    const mainBodyBox = children[1];
+    expect(mainBodyBox.type).toBe("box");
+    const sections = mainBodyBox.getChildren();
+    expect(sections.length).toBe(2);
+    const lastRecallSection = sections[0];
+    const historySection = sections[1];
+
+    const lrHeader = lastRecallSection.getChildren()[0];
+    const histHeader = historySection.getChildren()[0];
+    expect(typeof lrHeader.props.onMouseUp).toBe("function");
+    expect(typeof histHeader.props.onMouseUp).toBe("function");
+
+    // Fold both sections
+    lrHeader.props.onMouseUp();
+    histHeader.props.onMouseUp();
+
+    // Headers still exist and are visible!
+    expect(lastRecallSection.getChildren().length).toBeGreaterThanOrEqual(1);
+    expect(historySection.getChildren().length).toBeGreaterThanOrEqual(1);
+
+    // Unfold both sections
+    lrHeader.props.onMouseUp();
+    histHeader.props.onMouseUp();
+    expect(lastRecallSection.getChildren().length).toBeGreaterThanOrEqual(2);
+    expect(historySection.getChildren().length).toBeGreaterThanOrEqual(2);
 
     // Verify command registration
     expect(mockApi.command.register).toHaveBeenCalledTimes(1);
