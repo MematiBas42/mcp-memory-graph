@@ -72,8 +72,37 @@ export class CrossEncoderReranker implements Reranker {
   ): Promise<Array<{ id: string; score: number }>> {
     if (docs.length === 0) return [];
     /* c8 ignore start */
-    // Model load + per-doc inference — never exercised in the hermetic test
-    // suite (would require downloading and running the real cross-encoder).
+    // 1. Fast GPU Microservice Path (HTTP: 127.0.0.1:8765)
+    // If the local GPU reranker service is running, offload directly to CUDA (15-40ms batch).
+    // Note: If modelName was explicitly customized to a non-default stub (e.g. in tests), bypass HTTP.
+    const localRerankUrl = process.env.MCP_MEMORY_RERANKER_URL || 'http://127.0.0.1:8765/rerank';
+    const isTestStub = this.modelName === 'stub-reranker';
+    if (!isTestStub) {
+      try {
+        const resp = await fetch(localRerankUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: _query,
+            documents: docs.map((d) => d.text),
+          }),
+          signal: AbortSignal.timeout(1500),
+        });
+        if (resp.ok) {
+          const data = (await resp.json()) as { results?: Array<{ index: number; score: number; logit: number }> };
+          if (Array.isArray(data?.results) && data.results.length === docs.length) {
+            return data.results.map((r) => ({
+              id: docs[r.index].id,
+              score: r.logit ?? r.score,
+            }));
+          }
+        }
+      } catch {
+        // GPU service unreachable or timed out -> Fallback cleanly to local ONNX
+      }
+    }
+
+    // 2. Local ONNX CPU Fallback
     await this.ensureInitialized();
 
     const results: Array<{ id: string; score: number }> = [];
