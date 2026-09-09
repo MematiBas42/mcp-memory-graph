@@ -14,7 +14,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type BetterSqlite3 from 'better-sqlite3';
 import { resolveDbPath } from '../db/db-path.js';
-import { formatKeyLine } from './recall-format.js';
+import { formatKeyLine, snippet } from './recall-format.js';
 import { getConfig } from '../config/loader.js';
 import { OllamaEmbeddingProvider } from '../embeddings/ollama.js';
 
@@ -155,15 +155,26 @@ When finishing a task or reaching a significant milestone, persist high-signal k
 
 /** Render the recall block, or null when nothing titled survived ranking. */
 export function formatRecall(memories: MemoryRow[]): string | null {
-  const lines = memories
-    .filter(m => m.title)
-    .map(m => `- ${formatKeyLine(m, 80)}`);
-  if (lines.length === 0) return null;
+  const titled = memories.filter(m => m.title);
+  if (titled.length === 0) return null;
+
+  const lines = titled.map(m => {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(m.id);
+    const idLine = isUuid || m.id.length > 8
+      ? `Memory ID: ${m.id} (short: ${m.id.slice(0, 8)})`
+      : `Memory ID: ${m.id}`;
+    const snip = snippet(m.content, 120);
+    const snipLine = snip ? `\n  Snippet: ${snip}` : '';
+    return `- Title: '${m.title}'\n  ${idLine}${snipLine}`;
+  });
+
   return (
-    `Possibly-relevant stored memories (search MCP before re-deriving this task):\n` +
+    `[Context Recall]\n` +
+    `Directly matching memories found for this prompt:\n` +
     lines.join('\n') +
-    `\nRun memory_search / memory_get to load full content — MCP wins over file memory on conflict.` +
-    `\nIf a recalled memory appears irrelevant or its title/scope is misleading (containing general keywords, not directing the scope), adjust it via memory_update based on its actual content.\n\n` +
+    `\n\nACTION FOR AGENT:\n` +
+    `Do NOT run \`memory_search\` to re-find these. Use \`memory_get(id="<Memory ID>")\` directly to read the full document immediately.` +
+    `\nIf a recalled memory appears irrelevant or its title/scope is misleading, adjust it via memory_update based on its actual content.\n\n` +
     MEMORY_PERSISTENCE_DIRECTIVE + '\n'
   );
 }

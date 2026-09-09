@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, appendFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, writeFileSync, appendFileSync, readFileSync, mkdirSync, renameSync } from 'node:fs';
 import { spawn, execSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename, join } from 'node:path';
@@ -537,6 +537,20 @@ const TURKISH_STOPWORDS = new Set([
   'diye', 'gibi', 'bana', 'bunu', 'olan', 'olarak', 'tam', 'daha', 'hemen',
 ]);
 
+export function atomicWriteJson(filePath: string, data: unknown): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      // safe ignore
+    }
+  }
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+  writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+  renameSync(tmpPath, filePath);
+}
+
 export function clearSessionLastRecall(sessionId: string, sessionStateDir?: string): void {
   try {
     const dir = sessionStateDir || join(homedir(), '.mcp-memory', 'sessions');
@@ -550,7 +564,7 @@ export function clearSessionLastRecall(sessionId: string, sessionStateDir?: stri
         state = { enabled: true, history: [] };
       }
       state.lastRecall = null;
-      writeFileSync(p, JSON.stringify(state, null, 2), 'utf-8');
+      atomicWriteJson(p, state);
     }
   } catch {
     // safe ignore
@@ -809,7 +823,7 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
         }
       }
       if (state.history.length > 20) state.history = state.history.slice(0, 20);
-      writeFileSync(p, JSON.stringify(state, null, 2), 'utf-8');
+      atomicWriteJson(p, state);
     } catch {
       // safe ignore
     }
@@ -826,7 +840,7 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           state = { enabled: true, history: [] };
         }
         state.lastRecall = null;
-        writeFileSync(p, JSON.stringify(state, null, 2), 'utf-8');
+        atomicWriteJson(p, state);
       }
     } catch {
       // safe ignore
@@ -1095,12 +1109,16 @@ export const opencodeMemoryPlugin: OpenCodePlugin = async (
           // Inject as a synthetic part:
           // 1. OpenCode TUI checks `!c.synthetic` and hides it from the user chat bubble (clean UI).
           // 2. OpenCode LLM prep layer passes all non-ignored parts to the model, so the AI sees context cleanly.
+          const text = recallBlock.startsWith('[Context Recall]')
+            ? `${recallBlock}\n`
+            : `[Context Recall]\n${recallBlock}\n`;
+
           output.parts.unshift({
             id: syntheticPartId,
             sessionID,
             messageID,
             type: 'text',
-            text: `[Context Recall]\n${recallBlock}\n`,
+            text,
             synthetic: true,
           });
 

@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, watch, FSWatcher } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, watch, renameSync, FSWatcher } from "node:fs";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
 
@@ -55,13 +55,23 @@ function getMemoryCountFromSqlite(): number {
   if (bunDatabaseClass) {
     try {
       const db = new bunDatabaseClass(dbPath, { readonly: true });
-      const row = db
-        .query(
-          "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND tx_expired IS NULL",
-        )
-        .get() as { count: number };
-      db.close();
-      return row?.count ?? 0;
+      try {
+        const row = db
+          .query(
+            "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND valid_to IS NULL AND tx_expired IS NULL",
+          )
+          .get() as { count: number };
+        db.close();
+        return row?.count ?? 0;
+      } catch {
+        const row = db
+          .query(
+            "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND tx_expired IS NULL",
+          )
+          .get() as { count: number };
+        db.close();
+        return row?.count ?? 0;
+      }
     } catch {
       // fallback to better-sqlite3
     }
@@ -72,16 +82,40 @@ function getMemoryCountFromSqlite(): number {
     const req = createRequire(import.meta.url);
     const Database = req("better-sqlite3");
     const db = new Database(dbPath, { readonly: true });
-    const row = db
-      .prepare(
-        "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND tx_expired IS NULL",
-      )
-      .get() as { count: number };
-    db.close();
-    return row?.count ?? 0;
+    try {
+      const row = db
+        .prepare(
+          "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND valid_to IS NULL AND tx_expired IS NULL",
+        )
+        .get() as { count: number };
+      db.close();
+      return row?.count ?? 0;
+    } catch {
+      const row = db
+        .prepare(
+          "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND tx_expired IS NULL",
+        )
+        .get() as { count: number };
+      db.close();
+      return row?.count ?? 0;
+    }
   } catch {
     return 0;
   }
+}
+
+function atomicWriteJson(filePath: string, data: unknown): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      // safe ignore
+    }
+  }
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+  writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
+  renameSync(tmpPath, filePath);
 }
 
 function getSessionStatePath(sessionId: string): string {
@@ -98,19 +132,26 @@ function getSessionStatePath(sessionId: string): string {
 }
 
 function readSessionState(sessionId: string): SessionState {
-  try {
-    const p = getSessionStatePath(sessionId);
-    if (existsSync(p)) {
-      const data = JSON.parse(readFileSync(p, "utf-8"));
+  const p = getSessionStatePath(sessionId);
+  if (!existsSync(p)) {
+    return { enabled: true, mutedIds: [], history: [] };
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const raw = readFileSync(p, "utf-8");
+      if (!raw || raw.trim().length === 0) {
+        continue;
+      }
+      const data = JSON.parse(raw);
       return {
         enabled: data.enabled !== false,
         mutedIds: Array.isArray(data.mutedIds) ? data.mutedIds : [],
         lastRecall: data.lastRecall,
         history: Array.isArray(data.history) ? data.history : [],
       };
+    } catch {
+      // Safe retry for transient locks / mid-write
     }
-  } catch {
-    // safe ignore
   }
   return { enabled: true, mutedIds: [], history: [] };
 }
@@ -118,10 +159,26 @@ function readSessionState(sessionId: string): SessionState {
 function saveSessionState(sessionId: string, state: SessionState): void {
   try {
     const p = getSessionStatePath(sessionId);
-    writeFileSync(p, JSON.stringify(state, null, 2), "utf-8");
+    atomicWriteJson(p, state);
   } catch {
     // safe ignore
   }
+}
+
+function resolveSessionId(sessionData?: any, api?: any): string {
+  const propId = sessionData?.session_id || sessionData?.sessionID;
+  if (propId && propId !== "global") {
+    return propId;
+  }
+  try {
+    const route = api?.route?.current;
+    if (route && (route.name === "session" || route.params?.sessionID)) {
+      if (route.params?.sessionID) return route.params.sessionID;
+    }
+  } catch {
+    // safe ignore
+  }
+  return propId || "global";
 }
 
 function toggleSessionMemory(sessionId: string): boolean {
@@ -209,7 +266,7 @@ function getAccordionState(sessionId: string): AccordionState {
  * Prompt bar mini status widget (e.g. "3 🧠 18")
  */
 function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
-  const sessionId = () => sessionData?.session_id || "global";
+  const sessionId = () => resolveSessionId(sessionData, api);
   const [sessionState, setSessionState] = solid.createSignal(readSessionState(sessionId()));
   const [totalMemories, setTotalMemories] = solid.createSignal(getMemoryCountFromSqlite());
 
@@ -220,17 +277,26 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
 
   refreshPrompt();
 
-  // Native OS-level reactive file watching (inotify on Linux) - 0ms event-driven sync
   let watcher: FSWatcher | null = null;
+  let refreshTimeout: NodeJS.Timeout | null = null;
+
+  const scheduleRefresh = () => {
+    refreshPrompt();
+    if (refreshTimeout) clearTimeout(refreshTimeout);
+    refreshTimeout = setTimeout(() => {
+      refreshPrompt();
+    }, 50);
+  };
+
+  // Native OS-level reactive file watching (inotify on Linux) - 0ms event-driven sync
   try {
     const sessionsDir = join(homedir(), ".mcp-memory", "sessions");
     if (!existsSync(sessionsDir)) {
       mkdirSync(sessionsDir, { recursive: true });
     }
-    const currentFile = `${(sessionId() || "global").replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
     watcher = watch(sessionsDir, (_eventType, filename) => {
-      if (!filename || filename === currentFile || filename.endsWith(".json")) {
-        refreshPrompt();
+      if (!filename || filename.endsWith(".json")) {
+        scheduleRefresh();
       }
     });
   } catch {
@@ -246,14 +312,18 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
   };
 
   // Event bus listeners for session lifecycle
-  addListener("message.updated", () => refreshPrompt());
-  addListener("message.part.inserted", () => refreshPrompt());
-  addListener("message.part.updated", () => refreshPrompt());
-  addListener("session.prompt", () => refreshPrompt());
-  addListener("session.updated", () => refreshPrompt());
-  addListener("session.idle", () => refreshPrompt());
+  addListener("message.updated", () => scheduleRefresh());
+  addListener("message.part.inserted", () => scheduleRefresh());
+  addListener("message.part.updated", () => scheduleRefresh());
+  addListener("session.prompt", () => scheduleRefresh());
+  addListener("session.updated", () => scheduleRefresh());
+  addListener("session.idle", () => scheduleRefresh());
 
   solid.onCleanup?.(() => {
+    if (refreshTimeout) {
+      clearTimeout(refreshTimeout);
+      refreshTimeout = null;
+    }
     if (watcher) {
       try {
         watcher.close();
@@ -273,8 +343,8 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
     node,
     {
       get content() {
-        const rawSessionId = sessionData?.session_id;
-        const isActiveSession = Boolean(rawSessionId && rawSessionId !== "global");
+        const currentSid = resolveSessionId(sessionData, api);
+        const isActiveSession = Boolean(currentSid && currentSid !== "global");
         const s = sessionState();
         const sessionRecallCount = isActiveSession ? (s?.history?.length ?? 0) : 0;
         const dbTotalCount = totalMemories();
@@ -286,8 +356,8 @@ function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
         if (memoryMcp && memoryMcp.status !== "connected") {
           return api.theme?.current?.error ?? "red";
         }
-        const rawSessionId = sessionData?.session_id;
-        const isActiveSession = Boolean(rawSessionId && rawSessionId !== "global");
+        const currentSid = resolveSessionId(sessionData, api);
+        const isActiveSession = Boolean(currentSid && currentSid !== "global");
         if (!isActiveSession) {
           return api.theme?.current?.textMuted ?? "gray";
         }
@@ -347,14 +417,14 @@ function showMemoryStatsDialog(api: any) {
  * Sidebar Memory Graph Widget (Ultra-Stable Tree Structure)
  */
 function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
-  const sid = sessionData?.session_id || "global";
-  const accordion = getAccordionState(sid);
+  const getSid = () => resolveSessionId(sessionData, api);
+  const accordion = getAccordionState(getSid());
 
   let mainExpanded = accordion.main;
   let lastRecallExpanded = accordion.lastRecall;
   let historyExpanded = accordion.history;
 
-  let currentSessionState = readSessionState(sid);
+  let currentSessionState = readSessionState(getSid());
   let memoryCount = getMemoryCountFromSqlite();
 
   // 1. ROOT CONTAINER (flexShrink: 0 & width: 100% prevent layout shrinkage)
@@ -420,6 +490,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
   solid.spread(sessionToggleBox, {
     flexShrink: 0,
     onMouseUp: () => {
+      const sid = getSid();
       const next = toggleSessionMemory(sid);
       currentSessionState = readSessionState(sid);
       updateToggleText(next);
@@ -574,6 +645,7 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     solid.spread(dotBox, {
       flexShrink: 0,
       onMouseUp: () => {
+        const sid = getSid();
         const nowMuted = toggleMemoryMute(sid, item.id);
         currentSessionState = readSessionState(sid);
         isMuted = nowMuted;
@@ -657,25 +729,69 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
   syncHistoryVisibility();
   syncMainVisibility();
 
-  // Lifecycle Event Listeners (Event-driven refresh when new memories are recalled)
+  // Lifecycle Event Listeners & File Watching (Event-driven refresh when new memories are recalled)
   const refreshFromDisk = () => {
-    currentSessionState = readSessionState(sid);
+    currentSessionState = readSessionState(getSid());
     populateData();
   };
 
-  const disposeMessage = api.event?.on?.("message.updated", (e: any) => {
-    if (e.properties?.info?.time?.completed) {
-      refreshFromDisk();
-    }
-  });
+  let sidebarWatcher: FSWatcher | null = null;
+  let sidebarRefreshTimeout: NodeJS.Timeout | null = null;
 
-  const disposePrompt = api.event?.on?.("session.prompt", () => refreshFromDisk());
-  const disposeIdle = api.event?.on?.("session.idle", () => refreshFromDisk());
+  const scheduleSidebarRefresh = () => {
+    refreshFromDisk();
+    if (sidebarRefreshTimeout) clearTimeout(sidebarRefreshTimeout);
+    sidebarRefreshTimeout = setTimeout(() => {
+      refreshFromDisk();
+    }, 50);
+  };
+
+  try {
+    const sessionsDir = join(homedir(), ".mcp-memory", "sessions");
+    if (!existsSync(sessionsDir)) {
+      mkdirSync(sessionsDir, { recursive: true });
+    }
+    sidebarWatcher = watch(sessionsDir, (_eventType, filename) => {
+      if (!filename || filename.endsWith(".json")) {
+        scheduleSidebarRefresh();
+      }
+    });
+  } catch {
+    // Graceful fallback
+  }
+
+  const disposes: (() => void)[] = [];
+  const addListener = (event: string, handler: (e: any) => void) => {
+    const dispose = api.event?.on?.(event, handler);
+    if (typeof dispose === "function") {
+      disposes.push(dispose);
+    }
+  };
+
+  addListener("message.updated", () => scheduleSidebarRefresh());
+  addListener("message.part.inserted", () => scheduleSidebarRefresh());
+  addListener("message.part.updated", () => scheduleSidebarRefresh());
+  addListener("session.prompt", () => scheduleSidebarRefresh());
+  addListener("session.updated", () => scheduleSidebarRefresh());
+  addListener("session.idle", () => scheduleSidebarRefresh());
 
   solid.onCleanup?.(() => {
-    if (disposeMessage) disposeMessage();
-    if (disposePrompt) disposePrompt();
-    if (disposeIdle) disposeIdle();
+    if (sidebarRefreshTimeout) {
+      clearTimeout(sidebarRefreshTimeout);
+      sidebarRefreshTimeout = null;
+    }
+    if (sidebarWatcher) {
+      try {
+        sidebarWatcher.close();
+      } catch {
+        // safe close
+      }
+      sidebarWatcher = null;
+    }
+    for (const dispose of disposes) {
+      dispose();
+    }
+    disposes.length = 0;
   });
 
   return rootBox;
@@ -758,6 +874,8 @@ export {
   showMemoryDetailDialog,
   showMemoryStatsDialog,
   createSidebarMemoryWidget,
+  resolveSessionId,
+  atomicWriteJson,
 };
 
 export default moduleExport;

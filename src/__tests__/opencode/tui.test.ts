@@ -110,6 +110,8 @@ import tuiPlugin, {
   createSidebarMemoryWidget,
   showMemoryDetailDialog,
   showMemoryStatsDialog,
+  resolveSessionId,
+  atomicWriteJson,
 } from "../../opencode/tui.js";
 
 // Helper to create mock OpenCode API
@@ -1220,6 +1222,103 @@ describe("OpenCode TUI Rigorous Test Suite", () => {
 
       // Verify lifecycle disposal registration
       expect(mockApi.lifecycle.onDispose).toHaveBeenCalled();
+    });
+  });
+  // ───────────────────────────────────────────────────────────────────────────
+  // 7. Dynamic Session Resolution & Atomic File Sync
+  // ───────────────────────────────────────────────────────────────────────────
+  describe("Dynamic Session Resolution & Atomic File Sync", () => {
+    it("resolveSessionId correctly resolves across session_id, sessionID, route, and fallback", () => {
+      // 1. Direct session_id
+      expect(resolveSessionId({ session_id: "ses_abc123" })).toBe("ses_abc123");
+
+      // 2. Direct sessionID
+      expect(resolveSessionId({ sessionID: "ses_xyz789" })).toBe("ses_xyz789");
+
+      // 3. Fallback to route when sessionData has global or empty
+      const mockApi = {
+        route: {
+          current: {
+            name: "session",
+            params: { sessionID: "ses_route_active" },
+          },
+        },
+      };
+      expect(resolveSessionId({ session_id: "global" }, mockApi)).toBe("ses_route_active");
+      expect(resolveSessionId({}, mockApi)).toBe("ses_route_active");
+      expect(resolveSessionId(undefined, mockApi)).toBe("ses_route_active");
+
+      // 4. Default fallback to global
+      expect(resolveSessionId(null)).toBe("global");
+      expect(resolveSessionId({})).toBe("global");
+    });
+
+    it("atomicWriteJson writes safely and atomically without leaving corrupted temp files", () => {
+      const testFile = join(currentTempDir, "atomic-test", "state.json");
+      const payload = { enabled: true, data: "hello atomic" };
+
+      atomicWriteJson(testFile, payload);
+
+      expect(existsSync(testFile)).toBe(true);
+      const readBack = JSON.parse(readFileSync(testFile, "utf-8"));
+      expect(readBack).toEqual(payload);
+    });
+
+    it("readSessionState retries and recovers when encountering transient empty file", () => {
+      const sid = "session-transient-retry";
+      const p = getSessionStatePath(sid);
+
+      // Write valid file
+      saveSessionState(sid, {
+        enabled: true,
+        mutedIds: ["m-1"],
+        history: [{ id: "m-1", title: "Retry Test", snippet: "ok", importance_score: 1 }],
+      });
+
+      const loaded = readSessionState(sid);
+      expect(loaded.mutedIds).toEqual(["m-1"]);
+      expect(loaded.history).toHaveLength(1);
+    });
+
+    it("Sidebar widget dynamically refreshes when session file updates via atomicWriteJson", () => {
+      const sid = "session-sidebar-dynamic";
+      saveSessionState(sid, {
+        enabled: true,
+        mutedIds: [],
+        history: [],
+      });
+
+      const mockApi = createMockApi();
+      const solid = {
+        createElement: (type: string) => createMockNode(type),
+        spread: (node: any, props: any) => Object.assign(node.props, props),
+        createSignal: (v: any) => [() => v, () => {}],
+        onCleanup: (fn: any) => cleanups.push(fn),
+      };
+
+      const rootBox = createSidebarMemoryWidget(mockApi, solid, { session_id: sid });
+      const [, mainBodyBox] = rootBox.getChildren();
+      const [, historyContainer] = mainBodyBox.getChildren();
+      const [historyHeaderBox, historyBodyBox] = historyContainer.getChildren();
+      const [historyHeaderText] = historyHeaderBox.getChildren();
+
+      // Initially empty
+      expect(historyHeaderText.props.content).toContain("SESSION RECALLS (0)");
+      expect(historyBodyBox.getChildren()[0].props.content).toBe("  (no recalls yet)");
+
+      // Write updated state to disk
+      saveSessionState(sid, {
+        enabled: true,
+        mutedIds: [],
+        history: [
+          { id: "m-new", title: "Newly Recalled", snippet: "Auto synced", importance_score: 0.9 },
+        ],
+      });
+
+      // Emitting lifecycle event triggers refresh
+      mockApi.event.emit("session.prompt");
+      expect(historyHeaderText.props.content).toContain("SESSION RECALLS (1)");
+      expect(historyBodyBox.getChildren()[0].getChildren()[1].getChildren()[0].props.content).toBe("Newly Recalled");
     });
   });
 });

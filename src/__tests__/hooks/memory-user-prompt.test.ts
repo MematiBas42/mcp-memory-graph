@@ -130,15 +130,20 @@ describe('memory-user-prompt hook helpers', () => {
   });
 
   describe('formatRecall', () => {
-    it('renders titled memories with short ids', () => {
+    it('renders titled memories with explicit UUID, short id, and agent action directives', () => {
       const block = formatRecall([
         { id: 'b5951ab3-7cd4-4191-8e35-ce1436bb45ff', title: '#4821 fix', content: '', importance_score: 0.3 },
       ]);
-      expect(block).toContain("'#4821 fix' [b5951ab3]");
-      expect(block).toContain('search MCP before re-deriving');
+      expect(block).toContain("[Context Recall]");
+      expect(block).toContain("Directly matching memories found for this prompt:");
+      expect(block).toContain("- Title: '#4821 fix'");
+      expect(block).toContain("Memory ID: b5951ab3-7cd4-4191-8e35-ce1436bb45ff (short: b5951ab3)");
+      expect(block).toContain("ACTION FOR AGENT:");
+      expect(block).toContain('Do NOT run `memory_search` to re-find these.');
+      expect(block).toContain('Use `memory_get(id="<Memory ID>")` directly to read the full document immediately.');
     });
 
-    it('appends a 1-line snippet when content is present', () => {
+    it('appends snippet when content is present', () => {
       const block = formatRecall([
         {
           id: 'b5951ab3-7cd4-4191-8e35-ce1436bb45ff',
@@ -147,7 +152,9 @@ describe('memory-user-prompt hook helpers', () => {
           importance_score: 0.3,
         },
       ]);
-      expect(block).toContain("'#4821 fix' [b5951ab3] — first line snippet");
+      expect(block).toContain("- Title: '#4821 fix'");
+      expect(block).toContain("Memory ID: b5951ab3-7cd4-4191-8e35-ce1436bb45ff (short: b5951ab3)");
+      expect(block).toContain("Snippet: first line snippet");
     });
 
     it('returns null when nothing titled survives', () => {
