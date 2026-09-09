@@ -109,6 +109,10 @@ describe('buildOpenCodeMemoryConfig', () => {
     expect(config).toEqual({
       type: 'local',
       command: ['node', '/dist/index.js'],
+      environment: {
+        MCP_CLIENT: 'opencode',
+        MCP_STRIP_TOOL_PREFIX: '1',
+      },
       enabled: true,
     });
   });
@@ -123,7 +127,9 @@ describe('buildOpenCodeMemoryConfig', () => {
       type: 'local',
       command: ['node', '/dist/index.js'],
       environment: {
+        MCP_CLIENT: 'opencode',
         MCP_MEMORY_CONFIG_PATH: '/proj/.mcp-memory/config.json',
+        MCP_STRIP_TOOL_PREFIX: '1',
       },
       enabled: true,
     });
@@ -144,11 +150,13 @@ describe('buildOpenCodeMemoryConfig', () => {
       type: 'local',
       command: ['node', '/dist/index.js'],
       environment: {
-        MCP_MEMORY_PROVIDER: 'ollama',
-        MCP_MEMORY_MODEL: 'custom-model',
+        MCP_CLIENT: 'opencode',
         MCP_MEMORY_DIMENSIONS: '1024',
-        OLLAMA_BASE_URL: 'http://127.0.0.1:11434',
+        MCP_MEMORY_MODEL: 'custom-model',
+        MCP_MEMORY_PROVIDER: 'ollama',
         MCP_NLI_DISABLED: '0',
+        MCP_STRIP_TOOL_PREFIX: '1',
+        OLLAMA_BASE_URL: 'http://127.0.0.1:11434',
       },
       timeout: 180000,
       enabled: true,

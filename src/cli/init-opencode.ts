@@ -391,6 +391,8 @@ export function buildOpenCodeMemoryConfig(opts: {
 
   if (isOllama) {
     const envVars: Record<string, string> = {
+      MCP_CLIENT: 'opencode',
+      MCP_STRIP_TOOL_PREFIX: '1',
       MCP_MEMORY_PROVIDER: 'ollama',
       MCP_MEMORY_MODEL: env.MCP_MEMORY_MODEL || 'nomic-embed-text',
       MCP_MEMORY_DIMENSIONS: env.MCP_MEMORY_DIMENSIONS || '768',
@@ -409,14 +411,19 @@ export function buildOpenCodeMemoryConfig(opts: {
     };
   }
 
+  const defaultEnv: Record<string, string> = {
+    MCP_CLIENT: 'opencode',
+    MCP_STRIP_TOOL_PREFIX: '1',
+  };
+  if (opts.projectConfigPath) {
+    defaultEnv.MCP_MEMORY_CONFIG_PATH = opts.projectConfigPath;
+  }
   const entry: Record<string, unknown> = {
     type: 'local',
     command: ['node', opts.distIndexPath],
+    environment: defaultEnv,
     enabled: true,
   };
-  if (opts.projectConfigPath) {
-    entry.environment = { MCP_MEMORY_CONFIG_PATH: opts.projectConfigPath };
-  }
   return entry;
 }
 
