@@ -1,24 +1,30 @@
 import { describe, it, expect, vi } from "vitest";
 
 // Mock @opentui/solid and solid-js before importing tuiPlugin
+let elementCounter = 0;
 vi.mock("@opentui/solid", () => ({
   createElement: (type: string) => {
     const children: any[] = [];
-    return {
+    const node: any = {
+      id: `${type}-${++elementCounter}`,
       type,
       props: {},
       parent: null,
       getChildren: () => children,
       add: (c: any) => {
-        c.parent = this;
+        c.parent = node;
         children.push(c);
       },
-      remove: (c: any) => {
-        c.parent = null;
-        const i = children.indexOf(c);
-        if (i !== -1) children.splice(i, 1);
+      remove: (idOrChild: any) => {
+        const id = typeof idOrChild === "string" ? idOrChild : idOrChild?.id;
+        const i = children.findIndex((c) => c.id === id || c === idOrChild);
+        if (i !== -1) {
+          const [removed] = children.splice(i, 1);
+          removed.parent = null;
+        }
       },
     };
+    return node;
   },
   spread: (node: any, props: any) => {
     Object.defineProperties(node.props, Object.getOwnPropertyDescriptors(props));

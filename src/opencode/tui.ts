@@ -1,14 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { createRequire } from "node:module";
 
 const PLUGIN_ID = "mcp-memory-graph.status";
-
-interface MemoryStats {
-  ok: boolean;
-  memories: number | string;
-  entities: number;
-}
 
 interface MemoryItem {
   id: string;
@@ -27,6 +22,66 @@ interface SessionState {
     matches: MemoryItem[];
   };
   history: MemoryItem[];
+}
+
+function getMemoryDbPath(): string {
+  return process.env.MCP_MEMORY_DB_PATH || join(homedir(), ".mcp-memory", "memory.db");
+}
+
+let bunDatabaseClass: any = null;
+
+async function initSqliteEngine(): Promise<void> {
+  // @ts-ignore
+  if (typeof Bun !== "undefined") {
+    try {
+      // @ts-ignore
+      const mod = await import("bun:sqlite");
+      bunDatabaseClass = mod.Database;
+    } catch {
+      // safe ignore
+    }
+  }
+}
+
+/**
+ * Directly queries SQLite for live memory count.
+ * Uses native bun:sqlite in OpenCode runtime, or better-sqlite3 in Node.js / Vitest.
+ */
+function getMemoryCountFromSqlite(): number {
+  const dbPath = getMemoryDbPath();
+  if (!existsSync(dbPath)) return 0;
+
+  // 1. Bun native SQLite (OpenCode environment)
+  if (bunDatabaseClass) {
+    try {
+      const db = new bunDatabaseClass(dbPath, { readonly: true });
+      const row = db
+        .query(
+          "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND tx_expired IS NULL",
+        )
+        .get() as { count: number };
+      db.close();
+      return row?.count ?? 0;
+    } catch {
+      // fallback to better-sqlite3
+    }
+  }
+
+  // 2. Node.js environment (Vitest / CLI)
+  try {
+    const req = createRequire(import.meta.url);
+    const Database = req("better-sqlite3");
+    const db = new Database(dbPath, { readonly: true });
+    const row = db
+      .prepare(
+        "SELECT count(*) as count FROM memories WHERE parent_id IS NULL AND superseded_at IS NULL AND tx_expired IS NULL",
+      )
+      .get() as { count: number };
+    db.close();
+    return row?.count ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 function getSessionStatePath(sessionId: string): string {
@@ -92,36 +147,13 @@ function toggleMemoryMute(sessionId: string, memoryId: string): boolean {
   return nowMuted;
 }
 
-// Global cached stats
-let cachedStats: MemoryStats = { ok: true, memories: 0, entities: 0 };
-let isFetchingStats = false;
-
-async function fetchStatsAsync(): Promise<MemoryStats> {
-  if (isFetchingStats) return cachedStats;
-  isFetchingStats = true;
-  try {
-    const res = await fetch("http://127.0.0.1:3100/api/stats", {
-      signal: AbortSignal.timeout(1500),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as any;
-      cachedStats = {
-        ok: true,
-        memories: data.total_memories ?? 0,
-        entities: Object.keys(data.by_document_type ?? {}).length,
-      };
-      return cachedStats;
-    }
-  } catch {
-    // REST server fallback
-  } finally {
-    isFetchingStats = false;
-  }
-  return cachedStats;
-}
-
+/**
+ * Safe DOM manipulations that check presence and pass string IDs to OpenTUI's remove(id).
+ */
 function safeAdd(parent: any, child: any): void {
   if (!parent || !child) return;
+  const children = typeof parent.getChildren === "function" ? parent.getChildren() : [];
+  if (children.includes(child)) return; // prevent duplicate node attachment in Yoga
   if (typeof parent.add === "function") {
     parent.add(child);
   } else if (typeof parent.appendChild === "function") {
@@ -131,7 +163,12 @@ function safeAdd(parent: any, child: any): void {
 
 function safeRemove(parent: any, child: any): void {
   if (!parent || !child) return;
-  if (typeof parent.remove === "function") {
+  const children = typeof parent.getChildren === "function" ? parent.getChildren() : [];
+  if (!children.includes(child)) return; // not attached
+  const id = typeof child === "string" ? child : child?.id;
+  if (id && typeof parent.remove === "function") {
+    parent.remove(id);
+  } else if (typeof parent.remove === "function") {
     parent.remove(child);
   } else if (typeof parent.removeChild === "function") {
     parent.removeChild(child);
@@ -169,7 +206,7 @@ function getAccordionState(sessionId: string): AccordionState {
 }
 
 /**
- * Prompt bar mini status widget (e.g. "3 🧠 12")
+ * Prompt bar mini status widget (e.g. "3 🧠 18")
  */
 function createMemoryPromptStatus(api: any, solid: any, sessionData?: any) {
   const sessionId = () => sessionData?.session_id || "global";
@@ -245,27 +282,26 @@ function showMemoryDetailDialog(api: any, memoryItem: any) {
 }
 
 function showMemoryStatsDialog(api: any) {
-  fetchStatsAsync().then((s) => {
-    const mcpList = api.state?.mcp?.() ?? [];
-    const memoryMcp = mcpList.find((m: any) => m.name === "memory");
+  const count = getMemoryCountFromSqlite();
+  const mcpList = api.state?.mcp?.() ?? [];
+  const memoryMcp = mcpList.find((m: any) => m.name === "memory");
 
-    api.ui?.dialog?.replace?.(() =>
-      api.ui.DialogAlert({
-        title: "MCP Memory Graph Status",
-        message: [
-          `Server Status: ${s.ok ? "Online" : "Offline"}`,
-          `MCP Connection: ${memoryMcp ? memoryMcp.status : "connected"}`,
-          `Active Memories: ${s.memories}`,
-          `Web Dashboard: http://localhost:3100`,
-        ].join("\n"),
-        onConfirm: () => api.ui.dialog.clear(),
-      }),
-    );
-  });
+  api.ui?.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "MCP Memory Graph Status",
+      message: [
+        `Database: ${getMemoryDbPath()}`,
+        `MCP Connection: ${memoryMcp ? memoryMcp.status : "connected"}`,
+        `Active Memories: ${count}`,
+        `Storage Engine: SQLite (Local-First)`,
+      ].join("\n"),
+      onConfirm: () => api.ui.dialog.clear(),
+    }),
+  );
 }
 
 /**
- * Sidebar Memory Graph Widget (Clean, Robust Template)
+ * Sidebar Memory Graph Widget (Ultra-Stable Tree Structure)
  */
 function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
   const sid = sessionData?.session_id || "global";
@@ -276,9 +312,9 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
   let historyExpanded = accordion.history;
 
   let currentSessionState = readSessionState(sid);
-  let currentStats = cachedStats;
+  let memoryCount = getMemoryCountFromSqlite();
 
-  // 1. ROOT CONTAINER (width: 100% and flexShrink: 0 prevent Yoga layout collapse)
+  // 1. ROOT CONTAINER (flexShrink: 0 & width: 100% prevent layout shrinkage)
   const rootBox = solid.createElement("box");
   solid.spread(rootBox, {
     flexDirection: "column",
@@ -298,30 +334,31 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     gap: 1,
   });
 
-  // Main Title Box (Toggle open/closed)
+  // Main Title Box (Toggle main accordion)
   const headerTitleBox = solid.createElement("box");
-  solid.spread(headerTitleBox, {
-    flexDirection: "row",
-    gap: 1,
-    onMouseUp: () => {
-      mainExpanded = !mainExpanded;
-      accordion.main = mainExpanded;
-      renderAll();
-    },
-  });
-
   const headerText = solid.createElement("text");
+
   const updateHeaderText = () => {
     const exp = mainExpanded ? "▼" : "▶";
-    const count = currentStats.memories;
     solid.spread(headerText, {
-      content: `${exp} 🧠 Memory Graph (${count})`,
+      content: `${exp} 🧠 Memory Graph (${memoryCount})`,
       fg: api.theme?.current?.text ?? "white",
       selectable: false,
     });
   };
   updateHeaderText();
   safeAdd(headerTitleBox, headerText);
+
+  solid.spread(headerTitleBox, {
+    flexDirection: "row",
+    gap: 1,
+    onMouseUp: () => {
+      mainExpanded = !mainExpanded;
+      accordion.main = mainExpanded;
+      updateHeaderText();
+      syncMainVisibility();
+    },
+  });
   safeAdd(headerBox, headerTitleBox);
 
   // Session ON/OFF Toggle Button
@@ -344,7 +381,6 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
       const next = toggleSessionMemory(sid);
       currentSessionState = readSessionState(sid);
       updateToggleText(next);
-      renderAll();
       api.ui?.toast?.({
         title: "Session Memory",
         message: next ? "Memory recall enabled for this session" : "Memory recall disabled for this session",
@@ -363,24 +399,12 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     gap: 0,
     paddingLeft: 1,
   });
-  safeAdd(rootBox, mainBodyBox);
 
-  // Section 1: LAST RECALL
+  // ── Section 1: LAST RECALL ────────────────────────────────────────────────
   const lastRecallContainer = solid.createElement("box");
   solid.spread(lastRecallContainer, { flexDirection: "column", width: "100%" });
 
   const lastRecallHeaderBox = solid.createElement("box");
-  solid.spread(lastRecallHeaderBox, {
-    flexDirection: "row",
-    width: "100%",
-    gap: 1,
-    onMouseUp: () => {
-      lastRecallExpanded = !lastRecallExpanded;
-      accordion.lastRecall = lastRecallExpanded;
-      renderAll();
-    },
-  });
-
   const lastRecallHeaderText = solid.createElement("text");
   safeAdd(lastRecallHeaderBox, lastRecallHeaderText);
   safeAdd(lastRecallContainer, lastRecallHeaderBox);
@@ -391,25 +415,43 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     width: "100%",
     paddingLeft: 1,
   });
-  safeAdd(lastRecallContainer, lastRecallBodyBox);
-  safeAdd(mainBodyBox, lastRecallContainer);
 
-  // Section 2: SESSION RECALLS
-  const historyContainer = solid.createElement("box");
-  solid.spread(historyContainer, { flexDirection: "column", width: "100%" });
+  const updateLastRecallHeader = () => {
+    const lastMatches = currentSessionState.lastRecall?.matches ?? [];
+    const lrExp = lastRecallExpanded ? "▼" : "▶";
+    solid.spread(lastRecallHeaderText, {
+      content: `${lrExp} LAST RECALL (${lastMatches.length})`,
+      fg: api.theme?.current?.textMuted ?? "gray",
+      selectable: false,
+    });
+  };
 
-  const historyHeaderBox = solid.createElement("box");
-  solid.spread(historyHeaderBox, {
+  const syncLastRecallVisibility = () => {
+    updateLastRecallHeader();
+    if (lastRecallExpanded) {
+      safeAdd(lastRecallContainer, lastRecallBodyBox);
+    } else {
+      safeRemove(lastRecallContainer, lastRecallBodyBox);
+    }
+  };
+
+  solid.spread(lastRecallHeaderBox, {
     flexDirection: "row",
     width: "100%",
     gap: 1,
     onMouseUp: () => {
-      historyExpanded = !historyExpanded;
-      accordion.history = historyExpanded;
-      renderAll();
+      lastRecallExpanded = !lastRecallExpanded;
+      accordion.lastRecall = lastRecallExpanded;
+      syncLastRecallVisibility();
     },
   });
+  safeAdd(mainBodyBox, lastRecallContainer);
 
+  // ── Section 2: SESSION RECALLS ────────────────────────────────────────────
+  const historyContainer = solid.createElement("box");
+  solid.spread(historyContainer, { flexDirection: "column", width: "100%" });
+
+  const historyHeaderBox = solid.createElement("box");
   const historyHeaderText = solid.createElement("text");
   safeAdd(historyHeaderBox, historyHeaderText);
   safeAdd(historyContainer, historyHeaderBox);
@@ -420,31 +462,54 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     width: "100%",
     paddingLeft: 1,
   });
-  safeAdd(historyContainer, historyBodyBox);
+
+  const updateHistoryHeader = () => {
+    const hist = currentSessionState.history || [];
+    const histExp = historyExpanded ? "▼" : "▶";
+    solid.spread(historyHeaderText, {
+      content: `${histExp} SESSION RECALLS (${hist.length})`,
+      fg: api.theme?.current?.textMuted ?? "gray",
+      selectable: false,
+    });
+  };
+
+  const syncHistoryVisibility = () => {
+    updateHistoryHeader();
+    if (historyExpanded) {
+      safeAdd(historyContainer, historyBodyBox);
+    } else {
+      safeRemove(historyContainer, historyBodyBox);
+    }
+  };
+
+  solid.spread(historyHeaderBox, {
+    flexDirection: "row",
+    width: "100%",
+    gap: 1,
+    onMouseUp: () => {
+      historyExpanded = !historyExpanded;
+      accordion.history = historyExpanded;
+      syncHistoryVisibility();
+    },
+  });
   safeAdd(mainBodyBox, historyContainer);
 
-  // Helper to render an interactive memory item row
+  const syncMainVisibility = () => {
+    if (mainExpanded) {
+      safeAdd(rootBox, mainBodyBox);
+    } else {
+      safeRemove(rootBox, mainBodyBox);
+    }
+  };
+
+  // Helper to render an interactive memory row with local in-place mute updates
   const createMemoryRow = (item: MemoryItem) => {
-    const isMuted = (currentSessionState.mutedIds || []).includes(item.id);
+    let isMuted = (currentSessionState.mutedIds || []).includes(item.id);
     const row = solid.createElement("box");
     solid.spread(row, { flexDirection: "row", width: "100%", gap: 1 });
 
     // Clickable Dot: Green (●) when active, Gray (○) when muted
     const dotBox = solid.createElement("box");
-    solid.spread(dotBox, {
-      flexShrink: 0,
-      onMouseUp: () => {
-        const nowMuted = toggleMemoryMute(sid, item.id);
-        currentSessionState = readSessionState(sid);
-        renderAll();
-        api.ui?.toast?.({
-          title: nowMuted ? "Memory Muted" : "Memory Restored",
-          message: nowMuted ? "Muted for this session" : "Active in this session",
-          variant: nowMuted ? "warning" : "info",
-        });
-      },
-    });
-
     const statusDot = solid.createElement("text");
     solid.spread(statusDot, {
       content: isMuted ? "○" : "●",
@@ -456,11 +521,6 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
 
     // Clickable Title: opens details modal
     const titleBox = solid.createElement("box");
-    solid.spread(titleBox, {
-      flexGrow: 1,
-      onMouseUp: () => showMemoryDetailDialog(api, item),
-    });
-
     const displayTitle = item.title.length > 25 ? item.title.slice(0, 23) + "…" : item.title;
     const titleText = solid.createElement("text");
     solid.spread(titleText, {
@@ -472,123 +532,111 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
     safeAdd(titleBox, titleText);
     safeAdd(row, titleBox);
 
+    solid.spread(titleBox, {
+      flexGrow: 1,
+      onMouseUp: () => showMemoryDetailDialog(api, item),
+    });
+
+    solid.spread(dotBox, {
+      flexShrink: 0,
+      onMouseUp: () => {
+        const nowMuted = toggleMemoryMute(sid, item.id);
+        currentSessionState = readSessionState(sid);
+        isMuted = nowMuted;
+        // In-place visual update (zero DOM rebuilding, completely rock-solid)
+        solid.spread(statusDot, {
+          content: isMuted ? "○" : "●",
+          fg: isMuted ? api.theme?.current?.textMuted ?? "gray" : api.theme?.current?.success ?? "green",
+        });
+        solid.spread(titleText, {
+          fg: isMuted ? api.theme?.current?.textMuted ?? "gray" : api.theme?.current?.text ?? "white",
+        });
+        api.ui?.toast?.({
+          title: nowMuted ? "Memory Muted" : "Memory Restored",
+          message: nowMuted ? "Muted for this session" : "Active in this session",
+          variant: nowMuted ? "warning" : "info",
+        });
+      },
+    });
+
     return row;
   };
 
-  // Declarative render function: updates headers and mounts/unmounts children
-  // (Avoids setting visible=false/Display.None which causes Yoga container collapse)
-  const renderAll = () => {
+  // Re-populates the contents of lastRecallBodyBox and historyBodyBox
+  const populateData = () => {
+    memoryCount = getMemoryCountFromSqlite();
     updateHeaderText();
     updateToggleText(currentSessionState.enabled);
+    updateLastRecallHeader();
+    updateHistoryHeader();
 
-    if (!mainExpanded) {
-      safeClear(mainBodyBox);
-      return;
-    }
-
-    // Ensure lastRecallContainer & historyContainer are attached to mainBodyBox
-    const children = typeof mainBodyBox.getChildren === "function" ? mainBodyBox.getChildren() : [];
-    if (!children.includes(lastRecallContainer)) safeAdd(mainBodyBox, lastRecallContainer);
-    if (!children.includes(historyContainer)) safeAdd(mainBodyBox, historyContainer);
-
-    // 1. Render Last Recall Section
-    const lastMatches = currentSessionState.lastRecall?.matches ?? [];
-    const lrExp = lastRecallExpanded ? "▼" : "▶";
-    solid.spread(lastRecallHeaderText, {
-      content: `${lrExp} LAST RECALL (${lastMatches.length})`,
-      fg: api.theme?.current?.textMuted ?? "gray",
-      selectable: false,
-    });
-
+    // 1. Populate Last Recall items
     safeClear(lastRecallBodyBox);
-    if (lastRecallExpanded) {
-      if (lastMatches.length === 0) {
-        const noneText = solid.createElement("text");
-        solid.spread(noneText, {
-          content: "  (none in last turn)",
+    const lastMatches = currentSessionState.lastRecall?.matches ?? [];
+    if (lastMatches.length === 0) {
+      const noneText = solid.createElement("text");
+      solid.spread(noneText, {
+        content: "  (none in last turn)",
+        fg: api.theme?.current?.textMuted ?? "gray",
+        selectable: false,
+      });
+      safeAdd(lastRecallBodyBox, noneText);
+    } else {
+      for (const match of lastMatches) {
+        safeAdd(lastRecallBodyBox, createMemoryRow(match));
+      }
+      const tokens = currentSessionState.lastRecall?.tokens ?? [];
+      if (tokens.length > 0) {
+        const tokensText = solid.createElement("text");
+        solid.spread(tokensText, {
+          content: `   tokens: ${tokens.slice(0, 4).join(", ")}`,
           fg: api.theme?.current?.textMuted ?? "gray",
+          truncate: true,
           selectable: false,
         });
-        safeAdd(lastRecallBodyBox, noneText);
-      } else {
-        for (const match of lastMatches) {
-          safeAdd(lastRecallBodyBox, createMemoryRow(match));
-        }
-        const tokens = currentSessionState.lastRecall?.tokens ?? [];
-        if (tokens.length > 0) {
-          const tokensText = solid.createElement("text");
-          solid.spread(tokensText, {
-            content: `   tokens: ${tokens.slice(0, 4).join(", ")}`,
-            fg: api.theme?.current?.textMuted ?? "gray",
-            truncate: true,
-            selectable: false,
-          });
-          safeAdd(lastRecallBodyBox, tokensText);
-        }
+        safeAdd(lastRecallBodyBox, tokensText);
       }
     }
 
-    // 2. Render Session Recalls Section
-    const hist = currentSessionState.history || [];
-    const histExp = historyExpanded ? "▼" : "▶";
-    solid.spread(historyHeaderText, {
-      content: `${histExp} SESSION RECALLS (${hist.length})`,
-      fg: api.theme?.current?.textMuted ?? "gray",
-      selectable: false,
-    });
-
+    // 2. Populate History items
     safeClear(historyBodyBox);
-    if (historyExpanded) {
-      const maxItems = Math.min(hist.length, 5);
-      if (hist.length === 0) {
-        const emptyText = solid.createElement("text");
-        solid.spread(emptyText, {
-          content: "  (no recalls yet)",
-          fg: api.theme?.current?.textMuted ?? "gray",
-          selectable: false,
-        });
-        safeAdd(historyBodyBox, emptyText);
-      } else {
-        for (let i = 0; i < maxItems; i++) {
-          safeAdd(historyBodyBox, createMemoryRow(hist[i]));
-        }
+    const hist = currentSessionState.history || [];
+    const maxItems = Math.min(hist.length, 5);
+    if (hist.length === 0) {
+      const emptyText = solid.createElement("text");
+      solid.spread(emptyText, {
+        content: "  (no recalls yet)",
+        fg: api.theme?.current?.textMuted ?? "gray",
+        selectable: false,
+      });
+      safeAdd(historyBodyBox, emptyText);
+    } else {
+      for (let i = 0; i < maxItems; i++) {
+        safeAdd(historyBodyBox, createMemoryRow(hist[i]));
       }
     }
   };
 
-  // Initial render
-  renderAll();
+  // Initial setup of the tree
+  populateData();
+  syncLastRecallVisibility();
+  syncHistoryVisibility();
+  syncMainVisibility();
 
-  // Initial silent stats fetch
-  fetchStatsAsync().then((s) => {
-    currentStats = s;
-    updateHeaderText();
-  }).catch(() => {});
-
-  // Lifecycle Event Listeners (Event-driven refresh)
+  // Lifecycle Event Listeners (Event-driven refresh when new memories are recalled)
   const refreshFromDisk = () => {
     currentSessionState = readSessionState(sid);
-    renderAll();
+    populateData();
   };
 
   const disposeMessage = api.event?.on?.("message.updated", (e: any) => {
     if (e.properties?.info?.time?.completed) {
       refreshFromDisk();
-      fetchStatsAsync().then((s) => {
-        currentStats = s;
-        updateHeaderText();
-      }).catch(() => {});
     }
   });
 
   const disposePrompt = api.event?.on?.("session.prompt", () => refreshFromDisk());
-  const disposeIdle = api.event?.on?.("session.idle", () => {
-    refreshFromDisk();
-    fetchStatsAsync().then((s) => {
-      currentStats = s;
-      updateHeaderText();
-    }).catch(() => {});
-  });
+  const disposeIdle = api.event?.on?.("session.idle", () => refreshFromDisk());
 
   solid.onCleanup?.(() => {
     if (disposeMessage) disposeMessage();
@@ -602,6 +650,8 @@ function createSidebarMemoryWidget(api: any, solid: any, sessionData: any) {
 const moduleExport = {
   id: PLUGIN_ID,
   async tui(api: any) {
+    await initSqliteEngine();
+
     let solid: any = null;
     try {
       // @ts-ignore
