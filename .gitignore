@@ -47,3 +47,7 @@ scripts/battle/web-shots/
 # Temporary playwright browser test artifacts
 .playwright-mcp/
 
+# Local research and analysis reports
+TURKISH_NLP_RESEARCH_*.md
+
+
