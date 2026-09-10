@@ -18,16 +18,32 @@ describe('memory-user-prompt hook helpers', () => {
     });
 
     it('drops words shorter than 4 chars', () => {
-      expect(tokenize('go to db now')).toEqual([]);
+      expect(tokenize('go to do now')).toEqual([]);
     });
 
-    it('extracts Turkish unicode words and common 3-char technical terms', () => {
+    it('extracts Turkish unicode words, stems roots, and filters Turkish stopwords', () => {
       const t = tokenize('Postgres veritabanında Türkçe işlem ve API entegrasyonu');
       expect(t).toContain('postgres');
-      expect(t).toContain('veritabanında');
+      expect(t).toContain('veritaban'); // stemmed root (taban-ı)!
       expect(t).toContain('türkçe');
-      expect(t).toContain('işlem');
       expect(t).toContain('api');
+      expect(t).not.toContain('ve'); // Turkish stopword filtered
+    });
+
+    it('stems Turkish inflectional suffixes for memory recall', () => {
+      const t = tokenize('Pi3 doğrudan erişimini nasıl kontrol ederiz?');
+      expect(t).toContain('erişim'); // -ini stripped to root
+      expect(t).toContain('doğrudan');
+      expect(t).toContain('kontrol');
+      expect(t).not.toContain('nasıl'); // stopword
+      expect(t).not.toContain('ederiz'); // stopword
+    });
+
+    it('stems locative suffixes on loanwords like planda -> plan', () => {
+      const t = tokenize('arka planda terminali kilitlemeyen süreç');
+      expect(t).toContain('arka');
+      expect(t).toContain('plan'); // planda -> plan
+      expect(t).toContain('süreç'); // süreçleri/süreç
     });
 
     it('caps the token set so a long prompt cannot fan out unbounded', () => {

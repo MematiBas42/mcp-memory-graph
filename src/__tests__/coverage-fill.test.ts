@@ -608,7 +608,7 @@ describe('hybrid search projections', () => {
   });
 
   it('sanitizeFtsQuery is a re-exported helper (sanity)', () => {
-    expect(sanitizeFtsQuery('hello')).toBe('"hello"');
+    expect(sanitizeFtsQuery('hello')).toBe('("hello"*)');
   });
 
   it('hybridSearch applies temporal_decay when configured', async () => {

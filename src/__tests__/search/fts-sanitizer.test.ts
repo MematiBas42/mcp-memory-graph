@@ -42,7 +42,7 @@ describe('sanitizeFtsQuery', () => {
     const result = sanitizeFtsQuery('foo*bar');
     expect(result).toContain('"foo"');
     expect(result).toContain('"bar"');
-    expect(result).not.toContain('*');
+    expect(result).toBe('("foo"*) AND ("bar"*)');
   });
 
   it('survives a mixed payload', () => {

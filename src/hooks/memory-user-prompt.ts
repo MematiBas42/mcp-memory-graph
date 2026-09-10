@@ -1,48 +1,12 @@
 #!/usr/bin/env node
 // Claude Code UserPromptSubmit hook — task-aware memory recall.
-//
-// SessionStart can only surface a GENERIC nudge (it fires before any prompt
-// exists). This hook fires WITH the prompt text, so it is the only place a
-// recall can be about the task the user just described. It keyword-searches the
-// memory DB and prints the top matching titles to stdout (which Claude Code
-// injects as context), nudging the agent to memory_search/memory_get the full
-// content BEFORE re-deriving work that is already captured.
-//
-// Cheap by design: opens SQLite read-only, NO embedder, self-gates on trivial
-// prompts so it does not fire on "yes"/"ok"/"continue", and never hangs.
 
 import { existsSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type BetterSqlite3 from 'better-sqlite3';
 import { resolveDbPath } from '../db/db-path.js';
 import { formatKeyLine } from './recall-format.js';
-
-/** English/Danish stopwords stripped from the token set before searching. */
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'you', 'your',
-  'can', 'please', 'should', 'would', 'could', 'have', 'has', 'what', 'when',
-  'where', 'which', 'about', 'make', 'made', 'use', 'using', 'look', 'looked',
-  'kan', 'skal', 'med', 'det', 'den', 'der', 'som', 'til', 'har', 'hvad',
-]);
-
-/** Common 3-character technical terms allowed as tokens. */
-const TECH_3_CHARS = new Set([
-  'api', 'sql', 'gpu', 'cpu', 'ram', 'git', 'mac', 'web', 'app', 'jwt',
-  'tui', 'mcp', 'cli', 'ssh', 'lan', 'log', 'bug', 'env', 'dns', 'ssl',
-]);
-
-/**
- * Safely lowercase a string respecting Turkish dotted/dotless I characters
- * for natural language while preserving ASCII technical acronyms.
- */
-export function trLowerCase(str: string): string {
-  if (!str) return '';
-  // If word is pure ASCII or typical uppercase acronym (like API, SQL, CLI), standard lowercase
-  if (/^[A-Za-z0-9_-]+$/.test(str)) {
-    return str.toLowerCase();
-  }
-  return str.replace(/İ/g, 'i').replace(/I/g, 'ı').toLowerCase().normalize('NFC');
-}
+import { tokenizeText, trLowerCase } from '../lib/nlp.js';
 
 export interface MemoryRow {
   id: string;
@@ -51,43 +15,21 @@ export interface MemoryRow {
   importance_score: number | null;
 }
 
-/** Pull searchable tokens from the prompt: 4-7 digit ids + words >= 4 chars (or 3-char tech terms). */
 export function tokenize(prompt: string): string[] {
-  const tokens = new Set<string>();
-  for (const m of prompt.matchAll(/\b\d{4,7}\b/g)) tokens.add(m[0]); // ticket/PR ids
-  for (const w of prompt.matchAll(/[\p{L}\p{N}_-]{3,}/gu)) {
-    const t = trLowerCase(w[0]);
-    if (!STOPWORDS.has(t)) {
-      if (t.length >= 4 || TECH_3_CHARS.has(t)) {
-        tokens.add(t);
-      }
-    }
-  }
-  return [...tokens].slice(0, 8); // bound the LIKE fan-out
+  return tokenizeText(prompt).slice(0, 8);
 }
 
-/**
- * Gate on task SIGNAL, not word-prefix: a prompt earns a recall if it carries an
- * id (ticket/PR) or >=2 meaningful tokens. Keeps "yes"/"ok"/"continue" silent
- * while still firing on "continue the #1234 deploy" — a prefix-based affirmation
- * filter wrongly gated the latter.
- */
 export function shouldRecall(tokens: string[]): boolean {
   const hasId = tokens.some(t => /^\d{4,7}$/.test(t));
   return hasId || tokens.length >= 2;
 }
 
-/**
- * Score candidate rows in JS: a title hit weighs more than a body hit,
- * importance breaks ties. The match floor (a title hit or >=2 body hits) stops a
- * high-importance memory from riding a single weak body-word onto every prompt.
- */
 export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 3): MemoryRow[] {
   return rows
     .map(r => {
       const title = trLowerCase(r.title || '');
       const content = trLowerCase(r.content || '');
-      let match = 0; // token-derived relevance, importance excluded
+      let match = 0; 
       for (const t of tokens) {
         if (title.includes(t)) match += 3;
         if (content.includes(t)) match += 1;
@@ -100,7 +42,6 @@ export function rankMemories(rows: MemoryRow[], tokens: string[], limit = 3): Me
     .map(s => s.row);
 }
 
-/** Render the recall block, or null when nothing titled survived ranking. */
 export function formatRecall(memories: MemoryRow[]): string | null {
   const lines = memories
     .filter(m => m.title)
@@ -146,13 +87,6 @@ async function main(): Promise<void> {
 
   const db = new DatabaseConstructor(dbPath, { readonly: true });
   try {
-    // No namespace filter: memories are often stored under an EXPLICIT namespace
-    // (e.g. a team or project name) that the cwd basename does not resolve to,
-    // so filtering by the resolved namespace silently hides them — the exact
-    // trap this hook exists to prevent. Rank by relevance across the local
-    // corpus and cap at 3; cross-project bleed is negligible at that size.
-    //
-    // Candidate pull is bounded so a vague prompt can never scan the whole corpus.
     const likeClauses = tokens.map(() => '(title LIKE ? OR content LIKE ?)').join(' OR ');
     const params: string[] = [];
     for (const t of tokens) params.push(`%${t}%`, `%${t}%`);
@@ -172,9 +106,6 @@ async function main(): Promise<void> {
   }
 }
 
-// Run only when invoked directly (not when imported by tests). Compare REALPATHS:
-// the global install is a symlink, so import.meta.url is symlink-resolved while
-// argv[1] is not — a naive compare never matches under nvm's global node_modules.
 function isMainModule(): boolean {
   if (!process.argv[1]) return false;
   try {

@@ -10,6 +10,8 @@ import { normalizeName, entityIdsByNameOrAlias } from '../graph/entity-store.js'
 import { rankMemoriesByPPR } from '../graph/pagerank.js';
 import { type Reranker, rerankRelevance } from './reranker.js';
 import { logger } from '../lib/logger.js';
+import { stemTurkish } from '../hooks/turkish-stemmer.js';
+import { trLowerCase, STOPWORDS, TR_STOPWORDS } from '../lib/nlp.js';
 
 // Smart/curly quotes that FTS5 can't parse and that users frequently paste.
 const SMART_QUOTES_RE = /[‘’‚‛“”„‟«»]/g;
@@ -18,16 +20,37 @@ const ZERO_WIDTH_RE = /[​-‍⁠﻿]/g;
 // Pictographic emoji that FTS5 may tokenize as exotic terms (we drop them).
 const EMOJI_RE = /\p{Extended_Pictographic}/gu;
 
+const SEGMENTER = new Intl.Segmenter('tr-TR', { granularity: 'word' });
+
 export function sanitizeFtsQuery(query: string): string {
-  return query
+  // Strip apostrophe suffixes (Docker'da -> Docker, Pi3'ün -> Pi3)
+  const noApostropheSuffix = query.replace(/([\p{L}\p{N}]+)['’][\p{L}]+/gu, '$1');
+
+  const cleaned = noApostropheSuffix
     .replace(SMART_QUOTES_RE, '"')
     .replace(ZERO_WIDTH_RE, '')
     .replace(EMOJI_RE, ' ')
-    .replace(/[*"(){}[\]^~\\:]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 0)
-    .map((w) => `"${w}"`)
-    .join(' ');
+    .replace(/[*"(){}[\]^~\\:]/g, ' ');
+
+  const queryParts: string[] = [];
+
+  for (const { segment, isWordLike } of SEGMENTER.segment(cleaned)) {
+    if (!isWordLike) continue;
+    const tLower = trLowerCase(segment);
+    if (STOPWORDS.has(tLower) || TR_STOPWORDS.has(tLower)) continue;
+
+    const stem = stemTurkish(tLower);
+    if (stem && stem !== tLower && stem.length >= 3) {
+      // BM25 boost: Exact match OR Prefix match (ayar OR ayar*)
+      queryParts.push(`("${tLower}" OR "${stem}"*)`);
+    } else {
+      queryParts.push(`("${tLower}"*)`);
+    }
+  }
+
+  // FTS5 implicitly ANDs space-separated terms, but explicit AND is safer
+  // when combining multiple OR sub-expressions.
+  return queryParts.join(' AND ');
 }
 
 function memoryAgeDays(updatedAt: string): number {
