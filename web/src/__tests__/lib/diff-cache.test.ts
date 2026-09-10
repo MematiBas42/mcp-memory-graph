@@ -5,7 +5,6 @@ import {
   clearDiffCache,
   getOrComputeDiff,
   getDiffCacheSize,
-  sweepExpiredDiffCache,
   makeDiffCacheKey,
   MAX_DIFF_CACHE_SIZE,
   type DiffResult,
@@ -129,9 +128,5 @@ describe("diff-cache (in-memory LRU cache)", () => {
     expect(getCachedDiff("mem_0", 1, 2)).toBeDefined()
     // newly added entry should be present
     expect(getCachedDiff("overflow_mem", 1, 2)).toBeDefined()
-  })
-
-  it("sweepExpiredDiffCache runs safely without error", () => {
-    expect(() => sweepExpiredDiffCache()).not.toThrow()
   })
 })

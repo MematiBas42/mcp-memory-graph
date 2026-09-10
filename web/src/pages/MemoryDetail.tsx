@@ -31,8 +31,27 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { getMemory, getVersions, getRelated, updateMemory, deleteMemory, restoreVersion } from "@/api/client"
-import { getOrComputeDiff, sweepExpiredDiffCache } from "@/lib/diff-cache"
+import { getOrComputeDiff } from "@/lib/diff-cache"
 import type { Memory, VersionRecord, SearchResult } from "@/types"
+
+function safeFormatJson(raw: unknown): string {
+  if (!raw) return ""
+  if (typeof raw === "object") {
+    try {
+      return JSON.stringify(raw, null, 2)
+    } catch {
+      return ""
+    }
+  }
+  if (typeof raw === "string") {
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2)
+    } catch {
+      return raw
+    }
+  }
+  return ""
+}
 
 export function MemoryDetail() {
   const { id } = useParams<{ id: string }>()
@@ -66,10 +85,6 @@ export function MemoryDetail() {
     setEditTags(m.tags?.join(", ") ?? "")
     setEditImportance(String(m.importance_score ?? 0.5))
   }
-
-  useEffect(() => {
-    sweepExpiredDiffCache()
-  }, [])
 
   useEffect(() => {
     if (!id) return
@@ -383,16 +398,11 @@ export function MemoryDetail() {
               const oldText = v.content
               const newText = nextVersion.content
 
-              // Format metadata JSON for comparison
-              const oldMetaStr = v.metadata ? JSON.stringify(JSON.parse(v.metadata), null, 2) : ""
-              const newMeta = (nextVersion as any).metadata
-              const newMetaStr = newMeta
-                ? typeof newMeta === "string"
-                  ? JSON.stringify(JSON.parse(newMeta), null, 2)
-                  : JSON.stringify(newMeta, null, 2)
-                : ""
+              // Format metadata JSON safely for comparison
+              const oldMetaStr = safeFormatJson(v.metadata)
+              const newMetaStr = safeFormatJson((nextVersion as any).metadata)
 
-              // 7-day cached diff calculation with Fast-Path
+              // In-memory LRU cached diff calculation with Fast-Path
               const cacheKey = `${memory.id}_v${v.version}_to_${index === 0 ? currentVersion : versions[index - 1].version}`
               const { summary, contentDiff, metaDiff, titleChanged } = getOrComputeDiff(
                 cacheKey,

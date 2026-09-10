@@ -95,14 +95,6 @@ export function getDiffCacheSize(): number {
 }
 
 /**
- * Kept for backward compatibility with existing callers.
- * In-memory cache is bounded to MAX_DIFF_CACHE_SIZE with LRU eviction.
- */
-export function sweepExpiredDiffCache(): void {
-  // No-op for bounded in-memory Map
-}
-
-/**
  * Computes or retrieves from in-memory cache a complete diff.
  * Past versions in SQLite are immutable, so in-memory caching is safe.
  */
