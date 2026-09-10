@@ -74,10 +74,20 @@ describe('Turkish Stemmer (TypeScript Port)', () => {
   });
 
   describe('Validation & Phonetics', () => {
-    it('validates Turkish alphabet words', () => {
+    it('validates Turkish alphabet words case-insensitively', () => {
       expect(isTurkishWord('saatler')).toBe(true);
+      expect(isTurkishWord('Saatler')).toBe(true);
       expect(isTurkishWord('türkçe')).toBe(true);
+      expect(isTurkishWord('TÜRKÇE')).toBe(true);
       expect(isTurkishWord('qué pasa')).toBe(false);
+    });
+
+    it('stems capitalized and apostrophe-separated terms correctly', () => {
+      expect(stemTurkish('Kitaplar')).toBe('kitap');
+      expect(stemTurkish('Standartları')).toBe('standart');
+      expect(stemTurkish("Redis'ten")).toBe('Redis');
+      expect(stemTurkish("API'ye")).toBe('API');
+      expect(stemTurkish("İstanbul'da")).toBe('İstanbul');
     });
 
     it('counts syllables accurately', () => {

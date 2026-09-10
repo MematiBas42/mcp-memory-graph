@@ -111,7 +111,8 @@ export function hasVowelHarmony(word: string): boolean {
 }
 
 export function isTurkishWord(word: string): boolean {
-  for (const char of word) {
+  const lower = word.toLocaleLowerCase('tr-TR');
+  for (const char of lower) {
     if (!ALPHABET.includes(char)) {
       return false;
     }
@@ -411,26 +412,38 @@ export class TurkishStemmer {
 
   stem(word: string, tryCount = 0): string {
     const trimmed = word.trim();
-    if (!this.validateWord(trimmed)) {
+    if (!trimmed) {
+      return '';
+    }
+
+    // Proper nouns, acronyms & technical terms separated by apostrophe (e.g. "İstanbul'da", "Redis'ten", "API'ye")
+    // In Turkish orthography, the stem precedes the inflectional apostrophe suffix.
+    const apostropheMatch = trimmed.match(/^([^'’]+)['’].*$/);
+    if (apostropheMatch && apostropheMatch[1]) {
+      return apostropheMatch[1];
+    }
+
+    const lower = trimmed.toLocaleLowerCase('tr-TR');
+    if (!this.validateWord(lower)) {
       return trimmed;
     }
 
     const stems: string[] = [];
 
     // 1. Nominal verb suffix state machine
-    this.genericSuffixStripper(NominalVerbStateA, trimmed, stems);
-    let wordsToStem = [...stems, trimmed];
+    this.genericSuffixStripper(NominalVerbStateA, lower, stems);
+    let wordsToStem = [...stems, lower];
 
     // 2. Noun suffix state machine
     for (const w of wordsToStem) {
       this.genericSuffixStripper(NounStateA, w, stems);
     }
 
-    wordsToStem = [...stems, trimmed];
+    wordsToStem = [...stems, lower];
 
     // Typo recovery rule: if no suffix stripped, try swapping last letter u/ü or ı/i
-    if (wordsToStem.includes(trimmed) && wordsToStem.length < 2 && tryCount < 1) {
-      const runes = Array.from(trimmed);
+    if (wordsToStem.includes(lower) && wordsToStem.length < 2 && tryCount < 1) {
+      const runes = Array.from(lower);
       const lastIdx = runes.length - 1;
       const lastLetter = runes[lastIdx];
       let wordChanged = false;
@@ -459,7 +472,8 @@ export class TurkishStemmer {
       this.genericSuffixStripper(DerivationalStateA, w, stems);
     }
 
-    return this.postProcess(stems, trimmed);
+    const stemmed = this.postProcess(stems, lower);
+    return stemmed !== lower ? stemmed : trimmed;
   }
 
   private genericSuffixStripper(state: IState, word: string, stems: string[]): void {
