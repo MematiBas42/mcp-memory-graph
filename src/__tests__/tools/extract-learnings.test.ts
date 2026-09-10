@@ -227,4 +227,16 @@ describe('extractFromTranscript', () => {
       expect(r.type).toBe('incident');
     }
   });
+
+  it('accepts Turkish natural language decisions and extracts correctly', () => {
+    const transcript = 'Geliştirme ortamında veritabanı ayarlarını SQLite yerine Postgres olarak değiştirmeye karar verdik.';
+    const results = extractFromTranscript(transcript);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].type).toBe('decision');
+    expect(results[0].content).toContain('Postgres');
+  });
+
+  it('accepts Turkish characters in isQualityContent', () => {
+    expect(isQualityContent('Kullanıcı şifreleme anahtarlarını güvenli biçimde saklamamız gerektiği konusunda kararlaştırdık.')).toBe(true);
+  });
 });

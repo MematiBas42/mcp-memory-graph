@@ -22,19 +22,29 @@ const EXTRACTION_PATTERNS: ExtractionPattern[] = [
     confidence: 0.5,
   },
   {
+    type: 'decision',
+    regex: /([^.!?\n]{20,}?)\s+(?:karar verdik|kararlaştırdık|olarak seçtik|kararı aldık)(?:\.|$)/gim,
+    confidence: 0.5,
+  },
+  {
     type: 'error_fix',
     regex: /(?:fixed by|the fix (?:was|is)|solution (?:was|is)|resolved by|the issue (?:was|is)|the problem (?:was|is))\s*[:;]?\s*(.+?)(?:\.|$)/gim,
     confidence: 0.6,
   },
   {
     type: 'error_fix',
-    regex: /(?:error|bug|issue)\s*[:;]?\s*(.+?)\s*(?:—|--|->|=>|:)\s*(?:fix(?:ed)?|resolv(?:ed|e)|solution)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
+    regex: /([^.!?\n]{20,}?)\s+(?:ile çözüldü|ile giderildi|şeklinde düzeltildi|sebebiyle kaynaklandı)(?:\.|$)/gim,
+    confidence: 0.6,
+  },
+  {
+    type: 'error_fix',
+    regex: /(?:error|bug|issue|hata|sorun)\s*[:;]?\s*(.+?)\s*(?:—|--|->|=>|:)\s*(?:fix(?:ed)?|resolv(?:ed|e)|solution|çözüm|düzeltme)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
     confidence: 0.6,
     combineGroups: true,
   },
   {
     type: 'pattern',
-    regex: /(?:pattern|noticed that|turns out|learned that|discovered that|TIL|insight)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
+    regex: /(?:pattern|noticed that|turns out|learned that|discovered that|TIL|insight|fark ettik|gördük ki|anlaşıldı ki|kalıp)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
     confidence: 0.4,
   },
   {
@@ -43,13 +53,18 @@ const EXTRACTION_PATTERNS: ExtractionPattern[] = [
     confidence: 0.4,
   },
   {
+    type: 'convention',
+    regex: /([^.!?\n]{20,}?)\s+(?:zorunludur|kuralıdır|standardıdır|gerekmektedir|yapılmalıdır)(?:\.|$)/gim,
+    confidence: 0.4,
+  },
+  {
     type: 'incident',
-    regex: /(?:root cause|postmortem|the outage|the incident|went down|brought down|regression|broke production|service degradation)\s*(?:was|were|is)?\s*[:;,]?\s*(.+?)(?:\.|$)/gim,
+    regex: /(?:root cause|postmortem|the outage|the incident|went down|brought down|regression|broke production|service degradation|kesinti|çökme|kök neden)\s*(?:was|were|is)?\s*[:;,]?\s*(.+?)(?:\.|$)/gim,
     confidence: 0.5,
   },
   {
     type: 'lesson',
-    regex: /(?:lesson learned|in hindsight|next time|going forward|the takeaway|key takeaway)\s*[:;,]?\s*(.+?)(?:\.|$)/gim,
+    regex: /(?:lesson learned|in hindsight|next time|going forward|the takeaway|key takeaway|öğrenilen ders|çıkarılan ders|özetle|ana ders)\s*[:;,]?\s*(.+?)(?:\.|$)/gim,
     confidence: 0.4,
   },
 ];
@@ -98,13 +113,13 @@ export function isQualityContent(content: string): boolean {
   if (content.length < 30) return false;
   if (content.length > 500) return false;
 
-  // Must contain at least 3 real words (>2 alpha chars each)
+  // Must contain at least 3 real words (>2 alpha chars each, Unicode-aware)
   const words = content.split(/\s+/);
-  const realWords = words.filter(w => (w.match(/[a-zA-Z]/g) ?? []).length > 2);
+  const realWords = words.filter(w => (w.match(/[\p{L}]/gu) ?? []).length > 2);
   if (realWords.length < 3) return false;
 
-  // At least 60% alphabetic characters (reject code/JSON/paths)
-  const alphaSpaceCount = (content.match(/[a-zA-Z\s]/g) ?? []).length;
+  // At least 60% alphabetic characters (reject code/JSON/paths, Unicode-aware)
+  const alphaSpaceCount = (content.match(/[\p{L}\s]/gu) ?? []).length;
   if (alphaSpaceCount / content.length < 0.6) return false;
 
   // Reject if starts with syntax/code indicators
