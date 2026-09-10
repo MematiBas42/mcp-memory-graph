@@ -69,7 +69,7 @@ export async function handleUpdate(
   if (input.volatility !== undefined) {
     updates.volatility = input.volatility;
   } else if (input.content !== undefined && input.content !== existing.content) {
-    updates.volatility = classifyVolatility(input.content, existing.document_type);
+    updates.volatility = classifyVolatility(input.content, updates.document_type ?? existing.document_type);
   }
 
   let newEmbedding: Float32Array | undefined;
@@ -80,8 +80,8 @@ export async function handleUpdate(
     newEmbedding = await embedder.embed(
       contextualizeForEmbedding(input.content, {
         title: input.title ?? existing.title,
-        document_type: existing.document_type,
-        namespace: existing.namespace,
+        document_type: updates.document_type ?? existing.document_type,
+        namespace: updates.namespace ?? existing.namespace,
       }),
     );
   }
