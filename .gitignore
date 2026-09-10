@@ -22,8 +22,10 @@ tsconfig.tsbuildinfo
 # Coverage reports
 coverage/
 
-# Claude Code agent worktrees (local only)
-.claude/worktrees/
+# Claude Code agent worktrees and local configs (preserve shared skills)
+.claude/*
+!.claude/skills/
+
 
 # Battle-test runtime artifacts (DBs, vault scratch) — keep plans + harnesses, drop data
 .battle/artifacts/
@@ -41,3 +43,7 @@ scripts/battle/web-shots/
 
 # local memory db created by running the server in-repo
 .mcp-memory/
+
+# Temporary playwright browser test artifacts
+.playwright-mcp/
+
