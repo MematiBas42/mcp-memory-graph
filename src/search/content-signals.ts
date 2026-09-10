@@ -1,10 +1,14 @@
 import type { VolatilityClass } from '../types.js';
 
-const RULES_RE = /\b(rule|must|never|always|required|mandatory)\b/i;
-const DECISIONS_RE = /\b(decision|decided|chose|because)\b/i;
-const ERRORS_RE = /\b(bug|fix|error|incident|broke|failed)\b/i;
+const RULES_RE =
+  /(?<![\p{L}0-9])(?:rule|must|never|always|required|mandatory|strictly|enforce|forbidden|kural|kuralları|zorunlu|zorunludur|asla|kesinlikle|şart|şarttır|gereklidir|gerekir|yapılmalı|yapılmalıdır|edilmeli|edilmelidir|uyulmalı|uyulmalıdır|dokunulmamalı|yasak|yasaktır)(?![\p{L}0-9])/iu;
+const DECISIONS_RE =
+  /(?<![\p{L}0-9])(?:decision|decided|chose|chosen|because|rationale|adopted|architecture|karar|karar verildi|kararlaştırıldı|seçildi|seçtik|tercih edildi|tercih ettik|çünkü|nedeniyle|sebebiyle|gerekçesiyle|uygun görüldü)(?![\p{L}0-9])/iu;
+const ERRORS_RE =
+  /(?<![\p{L}0-9])(?:bug|fix|fixed|error|incident|broke|broken|failed|failure|crash|crashed|leak|leaked|hata|hatası|çözüm|çözümü|çözüldü|çözdük|sorun|sorunu|arıza|çökme|çöktü|düzeltildi|düzeltme|onarılmalı|onarıldı|halledebildik|halledildi|fixlendi|fixledik|kaynaklıydı)(?![\p{L}0-9])/iu;
 const CODE_BLOCK_RE = /```/;
-const DRAFT_RE = /\b(todo|placeholder|draft|wip)\b/i;
+const DRAFT_RE =
+  /(?<![\p{L}0-9])(?:todo|placeholder|draft|wip|tbd|taslak|geçici|yapılacak|tamamlanacak)(?![\p{L}0-9])/iu;
 
 /**
  * Content that asserts a point-in-time/operational state — the kind of claim
@@ -14,12 +18,12 @@ const DRAFT_RE = /\b(todo|placeholder|draft|wip)\b/i;
  * tuning.
  */
 const VOLATILE_RE =
-  /\b(deployed|deploy|live|in prod|production|rolled out|currently|as of|right now|today|this (week|sprint)|verified|passing|green|failing|red|status|up to date|latest|now live|in progress|pending|wip)\b/i;
+  /(?<![\p{L}0-9])(?:deployed|deploy|in prod|production|rolled out|currently|as of|right now|today|this (?:week|sprint)|now live|in progress|pending|canlıda|yayında|şu anda|şu an|bugün|bu hafta|aktif olarak|geçici|sürmekte|(?:ci|test(?:ler)?|build)\s+(?:passing|failing|green|red|başarılı|başarısız))(?![\p{L}0-9])/iu;
 
 /** document_type values whose facts are inherently operational/point-in-time. */
 const VOLATILE_DOC_TYPES = new Set(['deploy', 'status', 'incident', 'incident-status', 'session', 'task-status']);
 /** document_type values whose facts are durable references/agreements. */
-const STABLE_DOC_TYPES = new Set(['reference', 'contract', 'policy', 'decision', 'adr', 'spec']);
+const STABLE_DOC_TYPES = new Set(['reference', 'contract', 'policy', 'decision', 'adr', 'spec', 'convention', 'architecture', 'sop']);
 
 /**
  * Classify how fast a memory's truth decays, from its content + document_type.
@@ -37,8 +41,16 @@ export function classifyVolatility(content: string, documentType?: string | null
   return 'normal';
 }
 
-export function computeContentSignal(content: string): number {
+export function computeContentSignal(content: string, documentType?: string | null): number {
   let score = 0.5;
+
+  // Document-type baseline adjustments
+  const dt = documentType?.toLowerCase().trim();
+  if (dt) {
+    if (dt === 'convention' || dt === 'policy' || dt === 'contract') score += 0.10;
+    else if (dt === 'decision' || dt === 'architecture' || dt === 'sop') score += 0.05;
+    else if (dt === 'error_fix' || dt === 'incident' || dt === 'lesson') score += 0.05;
+  }
 
   // Boosts
   if (RULES_RE.test(content)) score += 0.15;
