@@ -5,71 +5,17 @@ import { contextualizeForEmbedding } from '../search/contextual.js';
 import { DEDUP_L2_DISTANCE } from '../constants/thresholds.js';
 import { handleStore } from './store.js';
 import { extractSignalText } from '../cli/turn-signal.js';
+import {
+  extractWithEngine,
+  isQualityContent,
+  generateTitle,
+  DEFAULT_MAX_EXTRACTIONS,
+} from './extraction/index.js';
+
+export { isQualityContent, generateTitle };
 
 type LearningType = ExtractedLearning['type'];
 
-interface ExtractionPattern {
-  type: LearningType;
-  regex: RegExp;
-  confidence: number;
-  combineGroups?: boolean;
-}
-
-const EXTRACTION_PATTERNS: ExtractionPattern[] = [
-  {
-    type: 'decision',
-    regex: /(?:decided|decision|agreed|chose|chosen|will use|going with|settled on|the approach is|we(?:'ll| will| should))\s*(?:to |that |on )?(.+?)(?:\.|$)/gim,
-    confidence: 0.5,
-  },
-  {
-    type: 'decision',
-    regex: /([^.!?\n]{20,}?)\s+(?:karar verdik|kararlaştırdık|olarak seçtik|kararı aldık)(?:\.|$)/gim,
-    confidence: 0.5,
-  },
-  {
-    type: 'error_fix',
-    regex: /(?:fixed by|the fix (?:was|is)|solution (?:was|is)|resolved by|the issue (?:was|is)|the problem (?:was|is))\s*[:;]?\s*(.+?)(?:\.|$)/gim,
-    confidence: 0.6,
-  },
-  {
-    type: 'error_fix',
-    regex: /([^.!?\n]{20,}?)\s+(?:ile çözüldü|ile giderildi|şeklinde düzeltildi|sebebiyle kaynaklandı)(?:\.|$)/gim,
-    confidence: 0.6,
-  },
-  {
-    type: 'error_fix',
-    regex: /(?:error|bug|issue|hata|sorun)\s*[:;]?\s*(.+?)\s*(?:—|--|->|=>|:)\s*(?:fix(?:ed)?|resolv(?:ed|e)|solution|çözüm|düzeltme)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
-    confidence: 0.6,
-    combineGroups: true,
-  },
-  {
-    type: 'pattern',
-    regex: /(?:pattern|noticed that|turns out|learned that|discovered that|TIL|insight|fark ettik|gördük ki|anlaşıldı ki|kalıp)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
-    confidence: 0.4,
-  },
-  {
-    type: 'convention',
-    regex: /(?:convention|standard|rule|policy|guideline|naming convention|must always|should always|never)\s*[:;]?\s*(.+?)(?:\.|$)/gim,
-    confidence: 0.4,
-  },
-  {
-    type: 'convention',
-    regex: /([^.!?\n]{20,}?)\s+(?:zorunludur|kuralıdır|standardıdır|gerekmektedir|yapılmalıdır)(?:\.|$)/gim,
-    confidence: 0.4,
-  },
-  {
-    type: 'incident',
-    regex: /(?:root cause|postmortem|the outage|the incident|went down|brought down|regression|broke production|service degradation|kesinti|çökme|kök neden)\s*(?:was|were|is)?\s*[:;,]?\s*(.+?)(?:\.|$)/gim,
-    confidence: 0.5,
-  },
-  {
-    type: 'lesson',
-    regex: /(?:lesson learned|in hindsight|next time|going forward|the takeaway|key takeaway|öğrenilen ders|çıkarılan ders|özetle|ana ders)\s*[:;,]?\s*(.+?)(?:\.|$)/gim,
-    confidence: 0.4,
-  },
-];
-
-const MAX_EXTRACTIONS = 20;
 
 /**
  * Strips structured noise from a Claude Code transcript before regex matching.
@@ -106,44 +52,9 @@ export function preprocessTranscript(transcript: string): string {
   return text;
 }
 
-/**
- * Validates that extracted content is natural language, not code/JSON/path fragments.
- */
-export function isQualityContent(content: string): boolean {
-  if (content.length < 30) return false;
-  if (content.length > 500) return false;
-
-  // Must contain at least 3 real words (>2 alpha chars each, Unicode-aware)
-  const words = content.split(/\s+/);
-  const realWords = words.filter(w => (w.match(/[\p{L}]/gu) ?? []).length > 2);
-  if (realWords.length < 3) return false;
-
-  // At least 60% alphabetic characters (reject code/JSON/paths, Unicode-aware)
-  const alphaSpaceCount = (content.match(/[\p{L}\s]/gu) ?? []).length;
-  if (alphaSpaceCount / content.length < 0.6) return false;
-
-  // Reject if starts with syntax/code indicators
-  const firstChar = content.trimStart()[0];
-  if (firstChar && '`|{}[]/<>#-+*='.includes(firstChar)) return false;
-
-  // Reject if looks like a file path
-  if (/^[\w/\\.-]+\.\w{1,5}$/.test(content.trim())) return false;
-
-  // Reject if contains code patterns
-  if (/(?:import\s+|require\(|function\s*\(|=>\s*\{|const\s+\w+\s*=|export\s+)/.test(content)) return false;
-
-  return true;
-}
-
 // Shared cosine-0.85 cutoff (see src/constants/thresholds.ts) — kept identical
 // to consolidate so paraphrases dedup at the same target on every path.
 const DEDUP_DISTANCE_THRESHOLD = DEDUP_L2_DISTANCE;
-
-function generateTitle(content: string): string {
-  const trimmed = content.trim().replace(/\s+/g, ' ');
-  if (trimmed.length <= 80) return trimmed;
-  return trimmed.slice(0, 77) + '...';
-}
 
 export function extractFromTranscript(
   transcript: string,
@@ -153,45 +64,10 @@ export function extractFromTranscript(
   // only the substantive turns (drop tool blocks / acks / coordination). A
   // plain-text transcript passes through unchanged (fall-safe).
   const cleaned = preprocessTranscript(extractSignalText(transcript));
-  const allowedTypes = categories && categories.length > 0 ? new Set(categories) : null;
-  const learnings: ExtractedLearning[] = [];
-  const seenContent = new Set<string>();
-
-  for (const pattern of EXTRACTION_PATTERNS) {
-    if (learnings.length >= MAX_EXTRACTIONS) break;
-    if (allowedTypes && !allowedTypes.has(pattern.type)) continue;
-
-    pattern.regex.lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = pattern.regex.exec(cleaned)) !== null) {
-      if (learnings.length >= MAX_EXTRACTIONS) break;
-
-      let content: string;
-      if (pattern.combineGroups && match[2]) {
-        /* c8 ignore next */
-        content = `Problem: ${match[1].trim()} / Fix: ${match[2].trim()}`;
-      } else {
-        content = match[1]?.trim() ?? '';
-      }
-
-      if (!isQualityContent(content)) continue;
-
-      const normalized = content.toLowerCase();
-      if (seenContent.has(normalized)) continue;
-      seenContent.add(normalized);
-
-      learnings.push({
-        type: pattern.type,
-        title: generateTitle(content),
-        content,
-        tags: ['auto-extracted', pattern.type],
-        confidence: pattern.confidence,
-      });
-    }
-  }
-
-  return learnings;
+  return extractWithEngine(cleaned, {
+    categories,
+    maxExtractions: DEFAULT_MAX_EXTRACTIONS,
+  });
 }
 
 export async function handleExtractLearnings(

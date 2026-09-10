@@ -236,7 +236,188 @@ describe('extractFromTranscript', () => {
     expect(results[0].content).toContain('Postgres');
   });
 
+  it('extracts Turkish decisions across 1st person singular, passive, continuous, future, and necessitative forms', () => {
+    const cases = [
+      { text: 'Performans artışı için bellek önbelleğinde Redis yerine Memcached kullanmaya karar verdim.', expected: 'decision' },
+      { text: 'Büyük veri yüklerini optimize etmek adına mimaride Kafka kuyruğu kullanılmasına karar verildi.', expected: 'decision' },
+      { text: 'Takım olarak arayüz katmanında Tailwind CSS yerine Emotion kütüphanesini seçiyoruz.', expected: 'decision' },
+      { text: 'Yeni mikroservis mimarisinde haberleşme protokolü olarak gRPC kullanılması kararlaştırılacak.', expected: 'decision' },
+      { text: 'Üretim ortamına geçişte kesinlikle dağıtık izleme için OpenTelemetry tercih edilmeli.', expected: 'decision' },
+    ];
+
+    for (const c of cases) {
+      const res = extractFromTranscript(c.text);
+      expect(res.length).toBeGreaterThan(0);
+      expect(res[0].type).toBe(c.expected);
+    }
+  });
+
+  it('extracts Turkish error fixes across multiple morphological forms', () => {
+    const cases = [
+      { text: 'Sunucu kilitlenmesine yol açan bellek sızıntısı sorunu bağlantı havuzunu sınırlandırarak çözdüm.', expected: 'error_fix' },
+      { text: 'Kritik ödeme işlemlerindeki çift çekim hatası idempotency anahtarı eklenerek giderildi.', expected: 'error_fix' },
+      { text: 'Mobil uygulamadaki oturum düşme problemi token yenileme mekanizması şeklinde düzeltiliyor.', expected: 'error_fix' },
+      { text: 'Eski kütüphaneden kaynaklanan TLS 1.0 uyumsuzluğu paket güncellemesiyle çözülecek.', expected: 'error_fix' },
+      { text: 'Yetkilendirme katmanındaki güvenlik açığı rol bazlı erişim denetimi uygulanarak düzeltilmelidir.', expected: 'error_fix' },
+    ];
+
+    for (const c of cases) {
+      const res = extractFromTranscript(c.text);
+      expect(res.length).toBeGreaterThan(0);
+      expect(res[0].type).toBe(c.expected);
+    }
+  });
+
+  it('extracts Turkish patterns and conventions across varied morphological forms', () => {
+    // Pattern forms (1st singular, passive, continuous)
+    const patternText = 'fark ettim: veritabanı bağlantı sayısı arttığında sorgu yanıt süreleri logaritmik olarak uzuyor.';
+    const patternRes = extractFromTranscript(patternText);
+    expect(patternRes.length).toBeGreaterThan(0);
+    expect(patternRes[0].type).toBe('pattern');
+
+    // Convention forms (passive necessitative, future, plural necessitative)
+    const conventionCases = [
+      'Tüm servis içi API isteklerinde correlation id başlığının iletilmesi zorunludur.',
+      'Veritabanı şeması değişikliklerinde geriye dönük uyumluluk prensibi uygulanmalıdır.',
+      'Her pull request birim test kapsamını en az yüzde seksen düzeyinde tutacak şekilde hazırlanmalıdır.',
+    ];
+    for (const text of conventionCases) {
+      const res = extractFromTranscript(text);
+      expect(res.length).toBeGreaterThan(0);
+      expect(res[0].type).toBe('convention');
+    }
+  });
+
   it('accepts Turkish characters in isQualityContent', () => {
     expect(isQualityContent('Kullanıcı şifreleme anahtarlarını güvenli biçimde saklamamız gerektiği konusunda kararlaştırdık.')).toBe(true);
+  });
+
+  it('extracts learnings containing dots in technical terms without truncation', () => {
+    const text = 'Veritabanı güncellemelerinde prisma.findUnique yerine tx.findUnique kullanılmasına karar verdik.';
+    const res = extractFromTranscript(text);
+    expect(res.length).toBeGreaterThan(0);
+    expect(res[0].type).toBe('decision');
+    expect(res[0].content).toContain('prisma.findUnique');
+    expect(res[0].content).toContain('tx.findUnique');
+  });
+
+  it('extracts error fixes with IP addresses and filenames', () => {
+    const text = 'Sunucu kilitlenmesi sorunu Redis 192.168.1.1 sunucusundaki config.ts ayarları güncellenerek çözüldü.';
+    const res = extractFromTranscript(text);
+    expect(res.length).toBeGreaterThan(0);
+    expect(res[0].type).toBe('error_fix');
+    expect(res[0].content).toContain('192.168.1.1');
+  });
+
+  it('handles Turkish uppercase and dotless I deduplication', () => {
+    const text = [
+      'Performans için Redis önbellek mekanizması kullanılmasına karar verildi.',
+      'PERFORMANS İÇİN REDİS ÖNBELLEK MEKANİZMASI KULLANILMASINA KARAR VERİLDİ.',
+    ].join('\n');
+    const res = extractFromTranscript(text);
+    expect(res).toHaveLength(1);
+  });
+
+  it('extracts decisions with prefix phrasing and colon / ki conjunction', () => {
+    const text = 'Karar verildi ki: mikroservisler arası iletişimde RabbitMQ yerine NATS kullanılacak.';
+    const res = extractFromTranscript(text);
+    expect(res.length).toBeGreaterThan(0);
+    expect(res[0].type).toBe('decision');
+    expect(res[0].content).toContain('NATS');
+  });
+
+  it('extracts pairwise structured error fixes in Turkish', () => {
+    const text = 'Hata: RecTV eklentisi 404 veriyor -> Çözüm: URI şemasını load time esnasında decrypt et.';
+    const res = extractFromTranscript(text);
+    expect(res.length).toBeGreaterThan(0);
+    expect(res[0].type).toBe('error_fix');
+    expect(res[0].content).toContain('RecTV');
+    expect(res[0].content).toContain('decrypt');
+  });
+
+  it('extracts conventions with strict negative rules (asla yapılmamalı)', () => {
+    const text = 'Kritik müşteri tablolarında cascade delete asla kullanılmamalıdır.';
+    const res = extractFromTranscript(text);
+    expect(res.length).toBeGreaterThan(0);
+    expect(res[0].type).toBe('convention');
+    expect(res[0].content).toContain('cascade delete');
+  });
+
+  it('extracts Turkish SRE incident root causes and lessons learned', () => {
+    const incidentText = 'Kök neden: background worker process heap bellek sınırına ulaştığı için gerçekleşti.';
+    const incRes = extractFromTranscript(incidentText);
+    expect(incRes.length).toBeGreaterThan(0);
+    expect(incRes[0].type).toBe('incident');
+    expect(incRes[0].content).toContain('heap bellek');
+
+    const lessonText = 'Öğrenilen ders: harici servis entegrasyonlarında daima katı timeout ve fallback koruması kurulmalıdır.';
+    const lesRes = extractFromTranscript(lessonText);
+    expect(lesRes.length).toBeGreaterThan(0);
+    expect(lesRes[0].type).toBe('lesson');
+    expect(lesRes[0].content).toContain('timeout');
+  });
+
+  it('avoids false-positive word substring extractions (çözümü, Düzeltilmiş/TIL)', () => {
+    const text1 = 'Bir ajanın bulduğu çözümü, diğer iki ajana "bunda bir hata bulmaya çalışın" diyerek test ettirebiliriz.';
+    expect(extractFromTranscript(text1)).toHaveLength(0);
+
+    const text2 = 'Düzeltilmiş parametre ile saf JS Snowball testini çalıştırıyorum.';
+    expect(extractFromTranscript(text2)).toHaveLength(0);
+
+    const text3 = 'Hızlıca "karar verdik", "sorun çözüldü" gibi kelimeleri tarayıp bunları kurtarır.';
+    expect(extractFromTranscript(text3)).toHaveLength(0);
+  });
+
+  it('extracts Turkish agglutinated loanword verbs (fixledik, deploy ettik, refactor ettik, mergeledik)', () => {
+    const loanwordCases = [
+      {
+        text: 'Önbellek sızıntısı problemini Redis ttl süresini yapılandırarak fixledik.',
+        expectedType: 'error_fix',
+        contains: 'Redis ttl',
+      },
+      {
+        text: 'Production ortamındaki kritik bellek taşması hatası hotfix ile fixlendi.',
+        expectedType: 'error_fix',
+        contains: 'bellek taşması',
+      },
+      {
+        text: 'Kimlik doğrulama katmanını JWT yerine OAuth2 standardına göre refactor ettik.',
+        expectedType: 'decision',
+        contains: 'OAuth2',
+      },
+      {
+        text: 'Staging ortamındaki yeni backend sürümünü Docker konteyneri ile deploy ettik.',
+        expectedType: 'decision',
+        contains: 'Docker',
+      },
+      {
+        text: 'Kritik özellik dalını ana geliştirme koduna çakışmasız şekilde mergeledik.',
+        expectedType: 'decision',
+        contains: 'özellik dalı',
+      },
+    ];
+
+    for (const c of loanwordCases) {
+      const res = extractFromTranscript(c.text);
+      expect(res.length).toBeGreaterThan(0);
+      expect(res[0].type).toBe(c.expectedType);
+      expect(res[0].content).toContain(c.contains);
+    }
+  });
+
+  it('validates typological divergence: English SVO prefix vs Turkish SOV loanword predicate', () => {
+    // English SVO
+    const enText = 'We decided to use Redis for fast distributed session caching.';
+    const enRes = extractFromTranscript(enText);
+    expect(enRes.length).toBeGreaterThan(0);
+    expect(enRes[0].type).toBe('decision');
+    expect(enRes[0].content).toContain('Redis');
+
+    // Turkish SOV with loanword verb
+    const trText = 'Kullanıcı oturum verilerini yönetmek için Redis kullanmaya karar verdik.';
+    const trRes = extractFromTranscript(trText);
+    expect(trRes.length).toBeGreaterThan(0);
+    expect(trRes[0].type).toBe('decision');
+    expect(trRes[0].content).toContain('Redis');
   });
 });
