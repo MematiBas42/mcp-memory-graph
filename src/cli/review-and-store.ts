@@ -6,7 +6,7 @@
 // agent-type Stop hook path.
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbPath } from '../db/db-path.js';
@@ -154,6 +154,19 @@ async function main(): Promise<void> {
 
   const finish = (code: number): void => {
     logLine(`review end (exit=${code})`);
+
+    // Sistem bildirimi (Arch Linux & macOS uyumlu)
+    try {
+      const msg = code === 0 ? 'Stop hook tamamlandı.' : `Stop hook hata ile bitti (kod: ${code})`;
+      if (process.platform === 'linux') {
+        execSync(`notify-send "Claude Code" "${msg}" -a "MCP Memory" -i "$HOME/.mcp-memory/claude-icon.svg"`);
+      } else if (process.platform === 'darwin') {
+        execSync(`osascript -e 'display notification "${msg}" with title "Claude Code"'`);
+      }
+    } catch {
+      // Bildirim daemon'u yoksa sessizce devam et
+    }
+
     // Mark the session reviewed so a re-fired Stop hook skips it.
     if (markerPath) {
       try {
@@ -175,6 +188,7 @@ async function main(): Promise<void> {
   child.on('error', () => finish(-1));
   child.on('exit', (code) => finish(code ?? 0));
 
+  child.stdin!.on('error', () => {}); // EPIPE (erken kapanma) hatalarını yoksay
   child.stdin!.write(prompt);
   child.stdin!.end();
 }
