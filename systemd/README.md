@@ -25,11 +25,12 @@ This directory contains systemd integration units and scripts providing two crit
           │                                               │
           └───────────────────────┬───────────────────────┘
                                   ▼
-               Waits for active `mcp-memory-review-*.scope`
-               (typically 5-10s, max 300s timeout)
+               Checks Pending Queue (`~/.mcp-memory/pending/`)
+               Waits for active reviews OR executes fallback
+               directly inside ExecStop (typically 5-10s, max 300s)
                                   │
                                   ▼
-                  Review Completes (exit code 0)
+                  Review Completes & Clears Queue
                                   │
                                   ▼
                      System Shuts Down Cleanly

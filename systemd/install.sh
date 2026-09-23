@@ -32,6 +32,7 @@ install_user_units() {
 install_system_units() {
   echo "==> Installing system-level shutdown guard (requires root/pkexec)..."
   local priv="sudo"
+  local current_user="${USER:-nitro}"
   if ! command -v sudo >/dev/null 2>&1 && command -v pkexec >/dev/null 2>&1; then
     priv="pkexec"
   fi
@@ -39,7 +40,7 @@ install_system_units() {
   $priv bash -c "
     cp '$SCRIPT_DIR/system/mcp-memory-shutdown-guard.sh' /usr/local/bin/mcp-memory-shutdown-guard.sh
     chmod +x /usr/local/bin/mcp-memory-shutdown-guard.sh
-    cp '$SCRIPT_DIR/system/mcp-memory-shutdown-guard.service' /etc/systemd/system/mcp-memory-shutdown-guard.service
+    sed 's/nitro/$current_user/g' '$SCRIPT_DIR/system/mcp-memory-shutdown-guard.service' > /etc/systemd/system/mcp-memory-shutdown-guard.service
     systemctl daemon-reload
     systemctl enable --now mcp-memory-shutdown-guard.service
   "
