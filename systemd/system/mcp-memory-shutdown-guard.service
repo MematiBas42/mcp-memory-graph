@@ -1,0 +1,15 @@
+[Unit]
+Description=Wait for MCP Memory Session Review before Shutdown, Reboot, or Sleep
+DefaultDependencies=no
+After=network.target network-online.target NetworkManager.service nss-lookup.target user@1000.service
+Before=shutdown.target reboot.target halt.target poweroff.target sleep.target suspend.target hibernate.target hybrid-sleep.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+ExecStop=/usr/local/bin/mcp-memory-shutdown-guard.sh nitro
+TimeoutStopSec=310
+
+[Install]
+WantedBy=multi-user.target sleep.target

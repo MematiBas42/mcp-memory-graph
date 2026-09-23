@@ -1,0 +1,9 @@
+[Unit]
+Description=MCP Memory Graph Dream Cycle Consolidation
+Documentation=https://github.com/YonasValentin/mcp-memory-graph
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node %h/.local/share/mcp-memory-graph/dist/index.js consolidate
+StandardOutput=append:%h/.mcp-memory/consolidation.out.log
+StandardError=append:%h/.mcp-memory/consolidation.log

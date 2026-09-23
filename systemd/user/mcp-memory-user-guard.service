@@ -1,0 +1,15 @@
+[Unit]
+Description=Wait for MCP Memory Review before User Session Exits
+DefaultDependencies=no
+After=cliproxyapi.service claude-token-proxy.service
+Before=shutdown.target exit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+ExecStop=%h/.local/bin/mcp-memory-user-guard.sh
+TimeoutStopSec=310
+
+[Install]
+WantedBy=default.target
