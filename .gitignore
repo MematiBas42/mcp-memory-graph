@@ -51,3 +51,6 @@ scripts/battle/web-shots/
 TURKISH_NLP_RESEARCH_*.md
 
 
+
+# Local SQL scripts
+*.sql

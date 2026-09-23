@@ -65,10 +65,15 @@ export function buildReviewerArgs(
   });
   const args = [
     '-p',
+    '--model',
+    'sonnet',
     '--strict-mcp-config',
-    '--mcp-config', mcpConfig,
-    '--allowedTools', allowedTools,
-    '--output-format', 'text',
+    '--mcp-config',
+    mcpConfig,
+    '--allowedTools',
+    allowedTools,
+    '--output-format',
+    'text',
   ];
   return { args, mcpConfig };
 }

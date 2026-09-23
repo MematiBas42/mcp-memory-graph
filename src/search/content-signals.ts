@@ -23,7 +23,7 @@ const VOLATILE_RE =
 /** document_type values whose facts are inherently operational/point-in-time. */
 const VOLATILE_DOC_TYPES = new Set(['deploy', 'status', 'incident', 'incident-status', 'session', 'task-status']);
 /** document_type values whose facts are durable references/agreements. */
-const STABLE_DOC_TYPES = new Set(['reference', 'contract', 'policy', 'decision', 'adr', 'spec', 'convention', 'architecture', 'sop']);
+const STABLE_DOC_TYPES = new Set(['reference', 'contract', 'policy', 'decision', 'adr', 'spec']);
 
 /**
  * Classify how fast a memory's truth decays, from its content + document_type.
@@ -41,16 +41,8 @@ export function classifyVolatility(content: string, documentType?: string | null
   return 'normal';
 }
 
-export function computeContentSignal(content: string, documentType?: string | null): number {
+export function computeContentSignal(content: string): number {
   let score = 0.5;
-
-  // Document-type baseline adjustments
-  const dt = documentType?.toLowerCase().trim();
-  if (dt) {
-    if (dt === 'convention' || dt === 'policy' || dt === 'contract') score += 0.10;
-    else if (dt === 'decision' || dt === 'architecture' || dt === 'sop') score += 0.05;
-    else if (dt === 'error_fix' || dt === 'incident' || dt === 'lesson') score += 0.05;
-  }
 
   // Boosts
   if (RULES_RE.test(content)) score += 0.15;
