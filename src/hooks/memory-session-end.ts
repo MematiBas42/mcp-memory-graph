@@ -31,6 +31,36 @@ function logHook(msg: string): void {
   }
 }
 
+export interface PendingJobData {
+  transcriptPath: string;
+  sessionId: string;
+  cwd: string;
+  createdAt: string;
+  pid: number | null;
+  attempts: number;
+}
+
+export function writePendingJob(
+  pendingDir: string,
+  safeSessionId: string,
+  transcriptPath: string,
+  cwdVal: string,
+  pid: number | null,
+  attempts: number,
+): string {
+  const pendingFile = join(pendingDir, `${safeSessionId}.json`);
+  mkdirSync(pendingDir, { recursive: true });
+  writeFileSync(pendingFile, JSON.stringify({
+    transcriptPath,
+    sessionId: safeSessionId,
+    cwd: cwdVal,
+    createdAt: new Date().toISOString(),
+    pid,
+    attempts,
+  }));
+  return pendingFile;
+}
+
 /**
  * Restricts the transcript_path supplied by the hook payload to a project-
  * controlled directory. Default base: `~/.claude/projects` (Claude Code's
@@ -103,21 +133,16 @@ async function main(): Promise<void> {
   // Register pending review job so shutdown guards hold the machine even if terminal/process is killed
   const pendingDir = join(homedir(), '.mcp-memory', 'pending');
   const safeSessionId = sessionId || `${Date.now()}`;
-  const pendingFile = join(pendingDir, `${safeSessionId}.json`);
   const cwdVal = (input?.cwd as string) || process.cwd();
 
-  try {
-    mkdirSync(pendingDir, { recursive: true });
-    writeFileSync(pendingFile, JSON.stringify({
-      transcriptPath,
-      sessionId: safeSessionId,
-      cwd: cwdVal,
-      createdAt: new Date().toISOString(),
-    }));
-    logHook(`Registered pending review: ${pendingFile}`);
-  } catch (err) {
-    logHook(`Failed to write pending file: ${err}`);
-  }
+  const writePending = (pid: number | null, attempts: number): void => {
+    try {
+      const pendingFile = writePendingJob(pendingDir, safeSessionId, transcriptPath, cwdVal, pid, attempts);
+      logHook(`Registered pending review: ${pendingFile} (pid=${pid}, attempts=${attempts})`);
+    } catch (err) {
+      logHook(`Failed to write pending file: ${err}`);
+    }
+  };
 
   try {
     const child = spawn('node', [reviewScript, transcriptPath, safeSessionId], {
@@ -125,9 +150,12 @@ async function main(): Promise<void> {
       stdio: 'ignore',
       env: { ...process.env, MCP_MEMORY_CWD: cwdVal },
     });
+    const childPid = typeof child.pid === 'number' ? child.pid : null;
+    writePending(childPid, 1);
     child.unref();
-    logHook(`Spawned detached reviewer pid=${child.pid} for session=${safeSessionId}`);
+    logHook(`Spawned detached reviewer pid=${childPid} for session=${safeSessionId}`);
   } catch (err) {
+    writePending(null, 0);
     logHook(`Failed to spawn reviewer: ${err}`);
     console.error(JSON.stringify({
       event: 'session_end_hook_spawn_failed',

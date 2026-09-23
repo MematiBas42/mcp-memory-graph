@@ -79,20 +79,41 @@ export function buildReviewerArgs(
   return { args, mcpConfig };
 }
 
+export function cleanupPendingFile(sessionId?: string): void {
+  try {
+    const id = sessionId || process.argv[3];
+    if (id) {
+      const pendingFile = join(homedir(), '.mcp-memory', 'pending', `${id}.json`);
+      if (existsSync(pendingFile)) {
+        unlinkSync(pendingFile);
+      }
+    }
+  } catch {
+    // best-effort
+  }
+}
+
 async function main(): Promise<void> {
   setTimeout(() => process.exit(1), HARD_TIMEOUT_MS);
 
   const [transcriptPath, sessionId] = process.argv.slice(2);
-  if (!transcriptPath) process.exit(1);
+  if (!transcriptPath) {
+    cleanupPendingFile(sessionId);
+    process.exit(1);
+  }
 
   let transcript: string;
   try {
     transcript = readFileSync(transcriptPath, 'utf-8');
   } catch {
+    cleanupPendingFile(sessionId);
     process.exit(0);
   }
 
-  if (transcript.length < MIN_TRANSCRIPT_CHARS) process.exit(0);
+  if (transcript.length < MIN_TRANSCRIPT_CHARS) {
+    cleanupPendingFile(sessionId);
+    process.exit(0);
+  }
 
   let trimmed = transcript;
   if (Buffer.byteLength(trimmed) > MAX_TRANSCRIPT_BYTES) {
@@ -118,7 +139,10 @@ async function main(): Promise<void> {
   }
 
   // #2 re-run guard: this session was already reviewed → don't double-write.
-  if (markerPath && existsSync(markerPath)) process.exit(0);
+  if (markerPath && existsSync(markerPath)) {
+    cleanupPendingFile(sessionId);
+    process.exit(0);
+  }
   const logLine = (msg: string): void => {
     try {
       appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`);
@@ -183,14 +207,7 @@ async function main(): Promise<void> {
     }
 
     // Clean up pending review queue entry
-    try {
-      const pendingFile = join(homedir(), '.mcp-memory', 'pending', `${sessionId}.json`);
-      if (existsSync(pendingFile)) {
-        unlinkSync(pendingFile);
-      }
-    } catch {
-      // best-effort
-    }
+    cleanupPendingFile(sessionId);
 
     if (typeof childOut === 'number') {
       try {
@@ -221,5 +238,33 @@ const isMain = (() => {
   }
 })();
 if (isMain) {
-  main().catch(() => process.exit(0));
+  process.on('uncaughtException', (err) => {
+    try {
+      console.error('Uncaught exception in review-and-store:', err);
+    } catch {
+      // ignore
+    }
+    cleanupPendingFile();
+    process.exit(0);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    try {
+      console.error('Unhandled rejection in review-and-store:', reason);
+    } catch {
+      // ignore
+    }
+    cleanupPendingFile();
+    process.exit(0);
+  });
+
+  main().catch((err) => {
+    try {
+      console.error('Main error in review-and-store:', err);
+    } catch {
+      // ignore
+    }
+    cleanupPendingFile();
+    process.exit(0);
+  });
 }

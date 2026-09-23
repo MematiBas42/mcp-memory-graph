@@ -13,7 +13,10 @@
  * exactly that one server, fast and regardless of cwd.
  */
 import { describe, it, expect } from 'vitest';
-import { buildReviewerArgs, resolveServerEntry } from '../../cli/review-and-store.js';
+import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { buildReviewerArgs, resolveServerEntry, cleanupPendingFile } from '../../cli/review-and-store.js';
 
 describe('buildReviewerArgs', () => {
   const entry = '/some/install/dist/index.js';
@@ -63,5 +66,17 @@ describe('buildReviewerArgs', () => {
     // dist/cli/review-and-store.js -> dist/index.js (portable, no hardcoded path)
     expect(resolveServerEntry().replace(/\\/g, '/')).toMatch(/\/index\.js$/);
     expect(resolveServerEntry()).not.toContain('npx');
+  });
+
+  it('cleanupPendingFile removes the session pending file if it exists', () => {
+    const testSession = 'test-session-cleanup-123';
+    const pendingDir = join(homedir(), '.mcp-memory', 'pending');
+    mkdirSync(pendingDir, { recursive: true });
+    const targetFile = join(pendingDir, `${testSession}.json`);
+    writeFileSync(targetFile, JSON.stringify({ test: true }));
+    expect(existsSync(targetFile)).toBe(true);
+
+    cleanupPendingFile(testSession);
+    expect(existsSync(targetFile)).toBe(false);
   });
 });

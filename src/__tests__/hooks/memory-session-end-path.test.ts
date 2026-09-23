@@ -7,7 +7,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveTranscriptPath } from '../../hooks/memory-session-end.js';
+import { resolveTranscriptPath, writePendingJob } from '../../hooks/memory-session-end.js';
+import { readFileSync } from 'node:fs';
 
 let tmpRoot: string;
 let allowed: string;
@@ -64,5 +65,26 @@ describe('resolveTranscriptPath for memory-session-end', () => {
 
   it('rejects paths that do not exist (mustExist)', () => {
     expect(resolveTranscriptPath(join(allowed, 'no-such-file.jsonl'))).toBeNull();
+  });
+
+  it('writePendingJob records pid and attempts correctly', () => {
+    const pendingDir = join(tmpRoot, 'pending');
+    const sessionId = 'test-session-456';
+    const transcript = join(allowed, 'session-abc.jsonl');
+    const cwd = '/test/cwd';
+
+    // Successful spawn case
+    const filePathSuccess = writePendingJob(pendingDir, sessionId, transcript, cwd, 99999, 1);
+    const contentSuccess = JSON.parse(readFileSync(filePathSuccess, 'utf-8'));
+    expect(contentSuccess.pid).toBe(99999);
+    expect(contentSuccess.attempts).toBe(1);
+    expect(contentSuccess.sessionId).toBe(sessionId);
+    expect(contentSuccess.cwd).toBe(cwd);
+
+    // Failed spawn case
+    const filePathFail = writePendingJob(pendingDir, sessionId, transcript, cwd, null, 0);
+    const contentFail = JSON.parse(readFileSync(filePathFail, 'utf-8'));
+    expect(contentFail.pid).toBeNull();
+    expect(contentFail.attempts).toBe(0);
   });
 });
