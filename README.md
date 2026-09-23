@@ -51,7 +51,7 @@ AI assistants forget everything between sessions. Your decisions, your patterns,
 - Knowledge stored today is searchable tomorrow, next week, next year.
 - Search works by meaning, not just keywords. "contract notice period" finds "90-day renewal clause".
 - It improves itself. It tracks what gets used, scores quality, extracts learnings from your sessions, and cleans itself up on a schedule.
-- It stays private. Local embeddings, no cloud APIs, no telemetry. The one exception is the optional Stop hook, which sends your session transcript to your own locally installed Claude Code (`claude -p`) for learning extraction. You can turn that off with `review_on_stop: false`.
+- It stays private. Local embeddings, no cloud APIs, no telemetry. The one exception is the optional SessionEnd hook, which sends your session transcript to your own locally installed Claude Code (`claude -p`) for learning extraction. You can turn that off with `review_on_session_end: false` (or `review_on_stop: false`).
 - It works for any kind of knowledge. Engineers store architecture decisions, lawyers store contract patterns, accountants store audit procedures.
 
 ## Quick start (about 5 minutes)
@@ -209,9 +209,9 @@ Five opt-in hooks, installed by `init`:
 | UserPromptSubmit | each prompt that carries a task signal (a ticket/PR id or ≥2 keywords) | Keyword-searches the store and surfaces matching memories so you recall prior work before re-deriving it; stays silent on trivial prompts |
 | PostToolUse | after a memory search | Tracks hits and misses to `search-log.jsonl` |
 | PreCompact | before context compression | Optional learning extraction (off by default) |
-| Stop | session ends | Spawns headless `claude -p` to review the session and store learnings |
+| SessionEnd | session ends (/exit or Ctrl+D) | Spawns headless `claude -p` to review the full session and store durable learnings |
 
-The Stop hook detaches in about 30 ms and reviews in the background for 10 to 60 seconds. It needs the `claude` CLI on `$PATH` (or `$CLAUDE_BIN`), authenticated. Turn it off with `review_on_stop: false` in `~/.mcp-memory/config.json`.
+The SessionEnd hook detaches in about 30 ms and reviews the session in the background for 10 to 60 seconds. It needs the `claude` CLI on `$PATH` (or `$CLAUDE_BIN`), authenticated. Turn it off with `review_on_session_end: false` (or `review_on_stop: false`) in `~/.mcp-memory/config.json`.
 
 ### Metadata on every memory
 
@@ -341,10 +341,10 @@ The server tracks how knowledge is used, scores quality, learns from sessions, a
                │
                ▼
  ┌──────────────────────────────────────────────────────────┐
- │            SESSION END (Stop command hook)                │
+ │            SESSION END (SessionEnd command hook)          │
  │  Hook spawns detached `claude -p` headless review         │
- │  --allowedTools restricts to memory_store only            │
- │  Claude judges → 0-5 curated entries via memory_store     │
+ │  --allowedTools restricts to memory write tools only      │
+ │  Claude judges → 0-5 curated entries via memory tools     │
  │  Deduplicates against existing memories                   │
  └─────────────┬────────────────────────────────────────────┘
                │
@@ -390,7 +390,7 @@ When a search returns nothing, the query is logged. The dream cycle's gap stage 
 
 - **Node.js 20+**, for any client.
 - **An MCP client.** [Claude Code](https://docs.anthropic.com/en/docs/claude-code) is the first-class experience; the automatic capture and recall hooks are Claude-Code-only. Other MCP clients (Codex, Cursor, and the rest) get all 51 tools but drive them manually. See "Other MCP clients" below.
-- **For the Stop hook only:** the `claude` binary on `$PATH` (or `$CLAUDE_BIN`), authenticated without prompting. Optional; disable with `review_on_stop: false`.
+- **For the SessionEnd hook only:** the `claude` binary on `$PATH` (or `$CLAUDE_BIN`), authenticated without prompting. Optional; disable with `review_on_session_end: false` (or `review_on_stop: false`).
 
 ### What `init` does
 
@@ -984,10 +984,10 @@ Claude Code Hooks (opt-in)
     ├── SessionStart ──> memory_stats (status check)
     ├── PostToolUse ───> search-log.jsonl (hit/miss tracking)
     ├── PreCompact ────> learning extraction (disabled by default)
-    └── Stop ──────────> spawn detached `claude -p` headless review
+    └── SessionEnd ────> spawn detached `claude -p` headless review
                               │
-                              └─> --allowedTools mcp__memory-server__memory_store
-                                  Claude reviews transcript → memory_store calls
+                              └─> --allowedTools (search, store, lesson, reflect)
+                                  Claude reviews transcript → memory entries stored
 
 Nightly Schedule (opt-in)
     └── 3:00 AM ───────> memory_consolidate (dream cycle)
@@ -1205,7 +1205,7 @@ npx mcp-memory-graph consolidate
 - **Scale ceiling.** Vector search is an exact scan: 9.1 ms p95 at 10K vectors, about 30 ms at 50K, and it degrades linearly from there. Comfortable into the low hundreds of thousands; past that you want a dedicated ANN index, which this server does not have yet.
 - **English-optimized.** The default MiniLM model is English-only in practice; cross-language matching is weak. A multilingual model can be configured via `MCP_MEMORY_MODEL` (with a rebuild), but the shipped benchmarks only validate the default.
 - **First-call cold start.** Three to five seconds on first use while the embedding model loads. Cached after that.
-- **Heuristic extraction.** `memory_extract_learnings` uses pattern matching, not an LLM. It catches common phrasings and misses subtle ones. (The Stop hook's `claude -p` review is the LLM-quality path.)
+- **Heuristic extraction.** `memory_extract_learnings` uses pattern matching, not an LLM. It catches common phrasings and misses subtle ones. (The SessionEnd hook's `claude -p` review is the LLM-quality path.)
 - **One process.** RBAC keys and revocation live in the server process. For horizontal scale you shard tenants across processes or give each tenant their own database file.
 
 ## Roadmap

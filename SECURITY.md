@@ -56,7 +56,7 @@ server.
   requests get 429 with `Retry-After`.
 - Path traversal on hooks: the Stop hook restricts the
   `transcript_path` payload to `~/.claude/projects` (override via
-  `MCP_MEMORY_TRANSCRIPT_BASE`). See `src/hooks/memory-stop.ts`.
+  `MCP_MEMORY_TRANSCRIPT_BASE`). See `src/hooks/memory-session-end.ts`.
 - Schema integrity: partial or legacy databases throw a clear error on
   open instead of being silently re-stamped. Embedding-dimension changes
   are validated against the value persisted in `schema_meta.embedding_dim`.

@@ -589,6 +589,7 @@ export interface ServerConfig {
     extract_on_session_end: boolean;
     track_searches: boolean;
     review_on_stop: boolean;
+    review_on_session_end?: boolean;
   };
   extraction: {
     categories: ExtractedLearning['type'][];

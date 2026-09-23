@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Claude Code Stop hook — review session via headless `claude -p` and let Claude store key findings.
-// Replaces the broken `type: "agent"` Stop hook (see anthropics/claude-code#39184).
+// Claude Code SessionEnd hook — review session via headless `claude -p` on session exit (/exit or Ctrl+D)
+// and let Claude store key findings. Triggers only once at true session end.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -26,7 +26,7 @@ export function resolveTranscriptPath(rawPath: unknown): string | null {
 
 async function main(): Promise<void> {
   // Re-entry guard: when this hook spawns a headless `claude -p`, that session
-  // will also fire a Stop hook on its own exit. Without this, infinite recursion.
+  // will also fire a SessionEnd hook on its own exit. Without this, infinite recursion.
   if (process.env.MCP_MEMORY_REVIEW_IN_PROGRESS === '1') process.exit(0);
 
   const stdinTimeout = setTimeout(() => process.exit(0), 5000);
@@ -46,7 +46,9 @@ async function main(): Promise<void> {
   const configPath = process.env.MCP_MEMORY_CONFIG_PATH || join(homedir(), '.mcp-memory', 'config.json');
   try {
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (config.hooks?.review_on_stop === false) process.exit(0);
+    if (config.hooks?.review_on_session_end === false || config.hooks?.review_on_stop === false) {
+      process.exit(0);
+    }
   } catch {
     // No config or unreadable — default behaviour is enabled.
   }
@@ -71,7 +73,7 @@ async function main(): Promise<void> {
     // Log structured event so the user can grep it; still exit 0 to avoid
     // surfacing as a Claude Code error.
     console.error(JSON.stringify({
-      event: 'stop_hook_spawn_failed',
+      event: 'session_end_hook_spawn_failed',
       err: err instanceof Error ? err.message : String(err),
     }));
     process.exit(0);

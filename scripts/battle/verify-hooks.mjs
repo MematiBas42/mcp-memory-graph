@@ -24,7 +24,7 @@ const HOOK = {
   sessionStart: join(DIST, 'hooks', 'memory-session-start.js'),
   postSearch: join(DIST, 'hooks', 'memory-post-search.js'),
   preCompact: join(DIST, 'hooks', 'memory-pre-compact.js'),
-  stop: join(DIST, 'hooks', 'memory-stop.js'),
+  sessionEnd: join(DIST, 'hooks', 'memory-session-end.js'),
 };
 
 for (const [name, p] of Object.entries(HOOK)) {
@@ -266,9 +266,9 @@ async function testStop() {
 
   // 4a: recursion guard set -> must exit 0 immediately, BEFORE reading stdin
   // or spawning anything. We assert it returns fast and never spawns claude.
-  const rGuard = await runHook(HOOK.stop, event, { MCP_MEMORY_REVIEW_IN_PROGRESS: '1' });
+  const rGuard = await runHook(HOOK.sessionEnd, event, { MCP_MEMORY_REVIEW_IN_PROGRESS: '1' });
   record(
-    'Stop honours recursion guard (MCP_MEMORY_REVIEW_IN_PROGRESS=1 -> exit 0, no spawn)',
+    'SessionEnd honours recursion guard (MCP_MEMORY_REVIEW_IN_PROGRESS=1 -> exit 0, no spawn)',
     rGuard.code === 0,
     `code=${rGuard.code} ms=${rGuard.ms}`,
   );
@@ -277,12 +277,12 @@ async function testStop() {
   // MCP_MEMORY_TRANSCRIPT_BASE, then spawns review-and-store.js detached.
   // Point CLAUDE_BIN at a harmless echo so the spawned `claude -p` cannot do
   // anything real, and assert the hook exits 0.
-  const rNormal = await runHook(HOOK.stop, event, {
+  const rNormal = await runHook(HOOK.sessionEnd, event, {
     MCP_MEMORY_TRANSCRIPT_BASE: TRANSCRIPT_BASE,
     CLAUDE_BIN: 'true', // /usr/bin/true: exits 0 immediately
   });
   record(
-    'Stop normal path validates transcript + spawns review (exit 0)',
+    'SessionEnd normal path validates transcript + spawns review (exit 0)',
     rNormal.code === 0,
     `code=${rNormal.code} ms=${rNormal.ms}` +
       (rNormal.stderr.trim() ? ` stderr=${JSON.stringify(rNormal.stderr.trim())}` : ''),
@@ -291,12 +291,12 @@ async function testStop() {
   // 4c: path traversal rejection. A transcript_path OUTSIDE the allowed base
   // must be rejected (sanitizePath returns null) and the hook still exits 0.
   const evilEvent = { ...event, transcript_path: '/etc/passwd' };
-  const rEvil = await runHook(HOOK.stop, evilEvent, {
+  const rEvil = await runHook(HOOK.sessionEnd, evilEvent, {
     MCP_MEMORY_TRANSCRIPT_BASE: TRANSCRIPT_BASE,
     CLAUDE_BIN: 'true',
   });
   record(
-    'Stop rejects out-of-base transcript_path (exit 0, no spawn)',
+    'SessionEnd rejects out-of-base transcript_path (exit 0, no spawn)',
     rEvil.code === 0,
     `code=${rEvil.code} ms=${rEvil.ms}`,
   );

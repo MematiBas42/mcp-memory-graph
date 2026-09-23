@@ -74,6 +74,7 @@ const ServerConfigSchema = z.object({
       extract_on_session_end: z.boolean().default(false),
       track_searches: z.boolean().default(true),
       review_on_stop: z.boolean().default(true),
+      review_on_session_end: z.boolean().default(true),
     })
     .default({}),
   extraction: z

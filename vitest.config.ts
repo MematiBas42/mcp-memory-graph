@@ -43,7 +43,7 @@ export default defineConfig({
         'src/cli/review-and-store.ts', // spawns claude-p; integration only
         'src/cli/consolidate.ts', // thin wrapper around handleConsolidate (covered)
         'src/cli/share.ts', // thin CLI/git wiring around exportGraph/mergeGraphFiles (pure core covered)
-        'src/hooks/memory-stop.ts', // resolveTranscriptPath is covered; main() is integration
+        'src/hooks/memory-session-end.ts', // resolveTranscriptPath is covered; main() is integration
         'src/hooks/memory-pre-compact.ts', // hook entry point; covered separately
         'src/hooks/memory-post-search.ts', // ditto
         'src/hooks/memory-session-start.ts', // ditto

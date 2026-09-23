@@ -1,25 +1,20 @@
 /**
- * Regression coverage for the Stop hook's transcript_path validation (B8).
+ * Regression coverage for the SessionEnd hook's transcript_path validation.
  *
- * Pre-fix: src/hooks/memory-stop.ts called sanitizePath WITHOUT allowedBase,
- * so any readable file on disk (e.g. /etc/passwd) would be accepted as
- * transcript_path and read by the spawned reviewer.
- *
- * Post-fix: resolveTranscriptPath restricts to ~/.claude/projects (override
- * via MCP_MEMORY_TRANSCRIPT_BASE).
+ * Restricts transcript_path to ~/.claude/projects (override via MCP_MEMORY_TRANSCRIPT_BASE).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveTranscriptPath } from '../../hooks/memory-stop.js';
+import { resolveTranscriptPath } from '../../hooks/memory-session-end.js';
 
 let tmpRoot: string;
 let allowed: string;
 let outsidePath: string;
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(join(tmpdir(), 'mcp-stop-test-'));
+  tmpRoot = mkdtempSync(join(tmpdir(), 'mcp-session-end-test-'));
   allowed = join(tmpRoot, 'allowed');
   mkdirSync(allowed, { recursive: true });
   process.env.MCP_MEMORY_TRANSCRIPT_BASE = allowed;
@@ -37,7 +32,7 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe('resolveTranscriptPath (B8 regression)', () => {
+describe('resolveTranscriptPath for memory-session-end', () => {
   it('accepts a path inside the allowed base', () => {
     const result = resolveTranscriptPath(join(allowed, 'session-abc.jsonl'));
     expect(result).toBe(join(allowed, 'session-abc.jsonl'));

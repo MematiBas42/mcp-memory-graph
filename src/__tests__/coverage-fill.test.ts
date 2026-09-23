@@ -42,7 +42,7 @@ import { findOrCreateRelationship, normalizeName } from '../graph/entity-store.j
 import { getStrategy } from '../chunking/strategies.js';
 import { hybridSearch, toSummary, toIdOnly, sanitizeFtsQuery } from '../search/hybrid.js';
 import { computeContentSignal } from '../search/content-signals.js';
-import { resolveTranscriptPath } from '../hooks/memory-stop.js';
+import { resolveTranscriptPath } from '../hooks/memory-session-end.js';
 import {
   insertMemory,
   updateMemory,
@@ -1330,7 +1330,7 @@ describe('vault tool defaults', () => {
 });
 
 // ---------------------------------------------------------------------------
-// hooks/memory-stop.ts — resolveTranscriptPath: env override
+// hooks/memory-session-end.ts — resolveTranscriptPath: env override
 // ---------------------------------------------------------------------------
 describe('resolveTranscriptPath env override', () => {
   let baseDir: string;

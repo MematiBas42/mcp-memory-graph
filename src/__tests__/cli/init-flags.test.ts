@@ -47,6 +47,9 @@ describe('parseInitFlags', () => {
   it('--no-review-on-stop → reviewOnStop false', () => {
     expect(parseInitFlags(['init', '--no-review-on-stop']).reviewOnStop).toBe(false);
   });
+  it('--no-review-on-session-end → reviewOnSessionEnd false', () => {
+    expect(parseInitFlags(['init', '--no-review-on-session-end']).reviewOnSessionEnd).toBe(false);
+  });
   it('--vault <path> captured', () => {
     expect(parseInitFlags(['init', '--vault', '/tmp/v']).vault).toBe('/tmp/v');
   });

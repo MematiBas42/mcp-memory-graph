@@ -30,6 +30,7 @@ export interface InitFlags {
   installSkill: boolean;
   registerServer: boolean;
   reviewOnStop?: boolean;
+  reviewOnSessionEnd?: boolean;
   vault?: string;
   schedule?: Array<{ hour: number; minute: number }>;
 }
@@ -39,7 +40,14 @@ export function parseInitFlags(argv: string[]): InitFlags {
     installSkill: !argv.includes('--no-skill'),
     registerServer: !argv.includes('--no-register'),
   };
-  if (argv.includes('--no-review-on-stop')) flags.reviewOnStop = false;
+  if (argv.includes('--no-review-on-session-end')) {
+    flags.reviewOnSessionEnd = false;
+    flags.reviewOnStop = false;
+  }
+  if (argv.includes('--no-review-on-stop')) {
+    flags.reviewOnStop = false;
+    flags.reviewOnSessionEnd = false;
+  }
   const vi = argv.indexOf('--vault');
   if (vi !== -1 && argv[vi + 1]) flags.vault = argv[vi + 1];
   const sched = parseSchedule(argv);

@@ -27,7 +27,7 @@ const HOOK_NAMES = [
   'memory-user-prompt.js',
   'memory-post-search.js',
   'memory-pre-compact.js',
-  'memory-stop.js',
+  'memory-session-end.js',
 ];
 
 interface CommandHookEntry {
@@ -83,8 +83,8 @@ function buildHooksToAdd(): Record<string, HookGroup[]> {
     PreCompact: [
       { hooks: [{ type: 'command', command: q('memory-pre-compact.js') }] },
     ],
-    Stop: [
-      { hooks: [{ type: 'command', command: q('memory-stop.js'), timeout: 10 }] },
+    SessionEnd: [
+      { hooks: [{ type: 'command', command: q('memory-session-end.js'), timeout: 15 }] },
     ],
   };
 }
@@ -166,11 +166,8 @@ function mergeSettingsHooks(scope: Scope): void {
     settings.hooks = {};
   }
 
-  // Upgrade: remove broken legacy Stop hooks so the new command-type memory-stop.js can take over.
-  // Reasons for removal:
-  //   1. type: "agent" Stop hooks silently fail on macOS (anthropics/claude-code#39184) — the
-  //      whole reason this hook was rewritten to spawn `claude -p` headless instead.
-  //   2. Old command-type memory-session-end.js hook is superseded by memory-stop.js.
+  // Upgrade: remove legacy Stop hooks (both old agent-type and memory-stop command hook)
+  // because session review correctly belongs on SessionEnd.
   if (settings.hooks['Stop']) {
     const before = settings.hooks['Stop'].length;
     settings.hooks['Stop'] = settings.hooks['Stop'].filter((group) =>
@@ -180,16 +177,19 @@ function mergeSettingsHooks(scope: Scope): void {
           h.type === 'command' &&
           'command' in h &&
           typeof h.command === 'string' &&
-          h.command.includes('memory-session-end')
+          (h.command.includes('memory-stop') || h.command.includes('memory-session-end'))
         ) {
           return true;
         }
         return false;
       }),
     );
-    const removed = before - settings.hooks['Stop'].length;
+    if (settings.hooks['Stop'].length === 0) {
+      delete settings.hooks['Stop'];
+    }
+    const removed = before - (settings.hooks['Stop'] ? settings.hooks['Stop'].length : 0);
     if (removed > 0) {
-      dim(`Removed ${removed} legacy Stop hook(s) (agent-type or memory-session-end) — replaced by memory-stop command hook`);
+      dim(`Removed ${removed} legacy Stop hook(s) — migrated to SessionEnd hook`);
     }
   }
 

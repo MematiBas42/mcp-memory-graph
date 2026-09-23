@@ -162,7 +162,7 @@ async function main(): Promise<void> {
 
     // Sistem bildirimi (Arch Linux & macOS uyumlu)
     try {
-      const msg = code === 0 ? 'Stop hook tamamlandı.' : `Stop hook hata ile bitti (kod: ${code})`;
+      const msg = code === 0 ? 'Oturum sonu hafıza analizi tamamlandı.' : `Oturum sonu analizi hata ile bitti (kod: ${code})`;
       if (process.platform === 'linux') {
         execSync(`notify-send "Claude Code" "${msg}" -a "MCP Memory" -i "$HOME/.mcp-memory/claude-icon.svg"`);
       } else if (process.platform === 'darwin') {

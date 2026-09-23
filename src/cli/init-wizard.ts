@@ -165,6 +165,7 @@ export function buildConfig(
     extract_on_session_end: false,
     track_searches: true,
     review_on_stop: true,
+    review_on_session_end: true,
   };
   return {
     defaults: {
@@ -180,7 +181,7 @@ export function buildConfig(
     hooks: {
       ...defaultHooks,
       ...(existing?.hooks ?? {}),
-      ...(answers.reviewOnStop !== undefined ? { review_on_stop: answers.reviewOnStop } : {}),
+      ...(answers.reviewOnStop !== undefined ? { review_on_stop: answers.reviewOnStop, review_on_session_end: answers.reviewOnStop } : {}),
     },
     extraction: existing?.extraction ?? {
       categories: [...LEARNING_CATEGORIES],

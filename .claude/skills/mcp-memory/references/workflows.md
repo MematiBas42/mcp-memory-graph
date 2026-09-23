@@ -84,7 +84,7 @@ npx mcp-memory-graph rebuild --vault ~/team-vault   # rebuild the SQLite cache f
 | SessionStart | session begins | Auto-recall status line (read-only DB) |
 | PostToolUse (search) | after a memory search | Logs `results_count` → feeds `memory_consolidate` knowledge-gap detection |
 | PreCompact | before context compaction | If `extract_on_compact` enabled → regex-mines the transcript → auto-captures learnings |
-| Stop | turn ends | Spawns `review-and-store` (LLM, default-on) to capture session learnings |
+| SessionEnd | session ends (/exit or Ctrl+D) | Spawns `review-and-store` (LLM, default-on) to capture session learnings |
 
 **Setup:**
 ```bash
@@ -93,7 +93,7 @@ npx mcp-memory-graph init --scope project  # → .claude/settings.json + .mcp.js
 npx mcp-memory-graph init --yes            # accept defaults, non-interactive
 npx mcp-memory-graph uninstall             # reverse
 ```
-- The Stop hook spawns `claude -p` headless — the `claude` binary must be on `$PATH` or set `$CLAUDE_BIN`.
+- The SessionEnd hook spawns `claude -p` headless — the `claude` binary must be on `$PATH` or set `$CLAUDE_BIN`.
 - The hook matcher hardcodes the server name `memory-server` (tool `mcp__memory-server__memory_search`). If you register the server under a different name, the hooks won't match.
 - `init --project` is **not** the same as `--scope project` (known gotcha — verify the resulting scope).
 - `init` (user scope) installs the hooks but does **not** register the MCP server — run `claude mcp add` (below) separately, or use `--scope project` which also writes `.mcp.json`.
