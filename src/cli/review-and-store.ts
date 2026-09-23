@@ -5,9 +5,10 @@
 // and (when warranted) one synthesized reflection. Replaces the broken
 // agent-type Stop hook path.
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, unlinkSync, realpathSync } from 'node:fs';
 import { execSync, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveDbPath } from '../db/db-path.js';
 import { resolveReviewPaths } from './review-paths.js';
@@ -180,6 +181,17 @@ async function main(): Promise<void> {
         // best-effort
       }
     }
+
+    // Clean up pending review queue entry
+    try {
+      const pendingFile = join(homedir(), '.mcp-memory', 'pending', `${sessionId}.json`);
+      if (existsSync(pendingFile)) {
+        unlinkSync(pendingFile);
+      }
+    } catch {
+      // best-effort
+    }
+
     if (typeof childOut === 'number') {
       try {
         closeSync(childOut);

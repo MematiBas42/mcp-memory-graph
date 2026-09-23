@@ -2,7 +2,7 @@
 // Claude Code SessionEnd hook — review session via headless `claude -p` on session exit (/exit or Ctrl+D)
 // and let Claude store key findings. Triggers only once at true session end.
 
-import { existsSync, readFileSync, appendFileSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -100,37 +100,33 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Register pending review job so shutdown guards hold the machine even if terminal/process is killed
+  const pendingDir = join(homedir(), '.mcp-memory', 'pending');
+  const safeSessionId = sessionId || `${Date.now()}`;
+  const pendingFile = join(pendingDir, `${safeSessionId}.json`);
+  const cwdVal = (input?.cwd as string) || process.cwd();
+
   try {
-    const hasSystemdRun = process.platform === 'linux' && existsSync('/usr/bin/systemd-run');
-    const sanitizedSessionId = sessionId ? sessionId.replace(/[^a-zA-Z0-9_-]/g, '') : `${Date.now()}`;
-    const unitName = `mcp-memory-review-${sanitizedSessionId}`;
+    mkdirSync(pendingDir, { recursive: true });
+    writeFileSync(pendingFile, JSON.stringify({
+      transcriptPath,
+      sessionId: safeSessionId,
+      cwd: cwdVal,
+      createdAt: new Date().toISOString(),
+    }));
+    logHook(`Registered pending review: ${pendingFile}`);
+  } catch (err) {
+    logHook(`Failed to write pending file: ${err}`);
+  }
 
-    const cmd = hasSystemdRun ? '/usr/bin/systemd-run' : 'node';
-    const cwdVal = (input?.cwd as string) || process.cwd();
-    const args = hasSystemdRun
-      ? [
-          '--user',
-          `--unit=${unitName}`,
-          '--description=MCP Memory Session Review',
-          '-p',
-          'DefaultDependencies=no',
-          '-p',
-          'TimeoutStopSec=300',
-          `--setenv=MCP_MEMORY_CWD=${cwdVal}`,
-          'node',
-          reviewScript,
-          transcriptPath,
-          sessionId,
-        ]
-      : [reviewScript, transcriptPath, sessionId];
-
-    const child = spawn(cmd, args, {
+  try {
+    const child = spawn('node', [reviewScript, transcriptPath, safeSessionId], {
       detached: true,
       stdio: 'ignore',
       env: { ...process.env, MCP_MEMORY_CWD: cwdVal },
     });
     child.unref();
-    logHook(`Spawned detached reviewer via ${hasSystemdRun ? 'systemd-run transient service' : 'direct node'} pid=${child.pid} for session=${sessionId}`);
+    logHook(`Spawned detached reviewer pid=${child.pid} for session=${safeSessionId}`);
   } catch (err) {
     logHook(`Failed to spawn reviewer: ${err}`);
     console.error(JSON.stringify({
