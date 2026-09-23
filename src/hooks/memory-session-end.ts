@@ -2,7 +2,7 @@
 // Claude Code SessionEnd hook — review session via headless `claude -p` on session exit (/exit or Ctrl+D)
 // and let Claude store key findings. Triggers only once at true session end.
 
-import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -109,9 +109,10 @@ async function main(): Promise<void> {
 // Allow tests to import `resolveTranscriptPath` without invoking main().
 const isMain = (() => {
   try {
-    return process.argv[1] === fileURLToPath(import.meta.url);
+    if (!process.argv[1]) return false;
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
-    return false;
+    return process.argv[1] === fileURLToPath(import.meta.url);
   }
 })();
 if (isMain) {

@@ -5,7 +5,7 @@
 // and (when warranted) one synthesized reflection. Replaces the broken
 // agent-type Stop hook path.
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { execSync, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -202,9 +202,10 @@ async function main(): Promise<void> {
 // the pure helpers above (buildReviewerArgs/resolveServerEntry) can be unit-tested.
 const isMain = (() => {
   try {
-    return process.argv[1] === fileURLToPath(import.meta.url);
+    if (!process.argv[1]) return false;
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
-    return false;
+    return process.argv[1] === fileURLToPath(import.meta.url);
   }
 })();
 if (isMain) {
