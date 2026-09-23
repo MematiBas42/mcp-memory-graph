@@ -106,12 +106,13 @@ async function main(): Promise<void> {
     const unitName = `mcp-memory-review-${sanitizedSessionId}`;
 
     const cmd = hasSystemdRun ? '/usr/bin/systemd-run' : 'node';
+    const cwdVal = (input?.cwd as string) || process.cwd();
     const args = hasSystemdRun
       ? [
           '--user',
-          '--scope',
           `--unit=${unitName}`,
           '--description=MCP Memory Session Review',
+          `--setenv=MCP_MEMORY_CWD=${cwdVal}`,
           'node',
           reviewScript,
           transcriptPath,
@@ -122,10 +123,10 @@ async function main(): Promise<void> {
     const child = spawn(cmd, args, {
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, MCP_MEMORY_CWD: (input?.cwd as string) || process.cwd() },
+      env: { ...process.env, MCP_MEMORY_CWD: cwdVal },
     });
     child.unref();
-    logHook(`Spawned detached reviewer via ${hasSystemdRun ? 'systemd-run scope' : 'direct node'} pid=${child.pid} for session=${sessionId}`);
+    logHook(`Spawned detached reviewer via ${hasSystemdRun ? 'systemd-run transient service' : 'direct node'} pid=${child.pid} for session=${sessionId}`);
   } catch (err) {
     logHook(`Failed to spawn reviewer: ${err}`);
     console.error(JSON.stringify({

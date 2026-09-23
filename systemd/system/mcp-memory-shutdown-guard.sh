@@ -7,7 +7,7 @@ WAITED=0
 TARGET_USER="${1:-nitro}"
 
 while [ $WAITED -lt $MAX_WAIT ]; do
-  ACTIVE=$(systemctl --machine="${TARGET_USER}@.host" --user list-units --state=active "mcp-memory-review-*.scope" --no-legend 2>/dev/null || true)
+  ACTIVE=$(systemctl --machine="${TARGET_USER}@.host" --user list-units --state=active "mcp-memory-review-*" --no-legend 2>/dev/null | grep -E "mcp-memory-review" || true)
   if [ -z "$ACTIVE" ]; then
     break
   fi

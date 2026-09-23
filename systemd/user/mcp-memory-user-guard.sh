@@ -6,7 +6,7 @@ MAX_WAIT=300
 WAITED=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
-  ACTIVE=$(systemctl --user list-units --state=active "mcp-memory-review-*.scope" --no-legend 2>/dev/null || true)
+  ACTIVE=$(systemctl --user list-units --state=active "mcp-memory-review-*" --no-legend 2>/dev/null | grep -E "mcp-memory-review" || true)
   if [ -z "$ACTIVE" ]; then
     break
   fi
