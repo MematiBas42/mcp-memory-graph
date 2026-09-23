@@ -9,7 +9,19 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sanitizePath } from '../lib/path-validation.js';
 
+function isDebugLogEnabled(): boolean {
+  try {
+    const configPath = process.env.MCP_MEMORY_CONFIG_PATH || join(homedir(), '.mcp-memory', 'config.json');
+    if (!existsSync(configPath)) return false;
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    return config.hooks?.debug_log === true;
+  } catch {
+    return false;
+  }
+}
+
 function logHook(msg: string): void {
+  if (!isDebugLogEnabled()) return;
   try {
     const logDir = join(homedir(), '.mcp-memory', 'logs');
     mkdirSync(logDir, { recursive: true });
