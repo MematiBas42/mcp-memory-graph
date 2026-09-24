@@ -33,6 +33,27 @@ export interface UserInteractionInfo {
   lastUserUuid: string | null;
 }
 
+export function isMeaningfulUserContent(content: unknown): boolean {
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (!trimmed) return false;
+    if (trimmed.includes('<local-command-caveat>')) return false;
+    if (trimmed.includes('<command-name>/clear</command-name>') || trimmed.includes('<command-name>/exit</command-name>')) return false;
+    if (trimmed === '/clear' || trimmed === 'clear' || trimmed === '/exit' || trimmed === 'exit') return false;
+    return true;
+  }
+  if (Array.isArray(content)) {
+    return content.some((block) => {
+      if (typeof block === 'string') return isMeaningfulUserContent(block);
+      if (block && typeof block === 'object' && block.type === 'text') {
+        return isMeaningfulUserContent(block.text);
+      }
+      return false;
+    });
+  }
+  return false;
+}
+
 export function extractUserInteraction(content: string): UserInteractionInfo {
   let userMessageCount = 0;
   let lastUserUuid: string | null = null;
@@ -43,9 +64,12 @@ export function extractUserInteraction(content: string): UserInteractionInfo {
     try {
       const obj = JSON.parse(line);
       if (obj.type === 'user') {
-        userMessageCount++;
-        if (typeof obj.uuid === 'string' && obj.uuid.length > 0) {
-          lastUserUuid = obj.uuid;
+        const rawContent = obj.message?.content ?? obj.content;
+        if (isMeaningfulUserContent(rawContent)) {
+          userMessageCount++;
+          if (typeof obj.uuid === 'string' && obj.uuid.length > 0) {
+            lastUserUuid = obj.uuid;
+          }
         }
       }
     } catch {

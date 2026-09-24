@@ -93,6 +93,17 @@ describe('buildReviewerArgs', () => {
       lastUserUuid: null,
     });
 
+    const clearOnlyJsonl = [
+      '{"type":"mode"}',
+      '{"type":"user","message":{"content":"<local-command-caveat>Caveat: ...</local-command-caveat>"}}',
+      '{"type":"user","message":{"content":"<command-name>/clear</command-name>\\n<command-message>clear</command-message>"}}',
+      '{"type":"system","subtype":"local_command"}',
+    ].join('\n');
+    expect(extractUserInteraction(clearOnlyJsonl)).toEqual({
+      userMessageCount: 0,
+      lastUserUuid: null,
+    });
+
     const activeJsonl = [
       '{"type":"mode"}',
       '{"type":"user","uuid":"u-1","message":{"content":"hello"}}',
