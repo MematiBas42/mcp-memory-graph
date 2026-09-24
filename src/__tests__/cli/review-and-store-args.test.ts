@@ -91,6 +91,7 @@ describe('buildReviewerArgs', () => {
     expect(extractUserInteraction(emptyJsonl)).toEqual({
       userMessageCount: 0,
       lastUserUuid: null,
+      hasAssistantResponse: false,
     });
 
     const clearOnlyJsonl = [
@@ -102,6 +103,18 @@ describe('buildReviewerArgs', () => {
     expect(extractUserInteraction(clearOnlyJsonl)).toEqual({
       userMessageCount: 0,
       lastUserUuid: null,
+      hasAssistantResponse: false,
+    });
+
+    const parameterizedCommandJsonl = [
+      '{"type":"mode"}',
+      '{"type":"user","uuid":"u-wf","message":{"content":"<command-name>/workflow-authoring</command-name>\\n<command-args>Plan multi-agent review</command-args>"}}',
+      '{"type":"assistant","message":{"content":"I will plan the workflow..."}}',
+    ].join('\n');
+    expect(extractUserInteraction(parameterizedCommandJsonl)).toEqual({
+      userMessageCount: 1,
+      lastUserUuid: 'u-wf',
+      hasAssistantResponse: true,
     });
 
     const activeJsonl = [
@@ -115,17 +128,19 @@ describe('buildReviewerArgs', () => {
     expect(extractUserInteraction(activeJsonl)).toEqual({
       userMessageCount: 2,
       lastUserUuid: 'u-2',
+      hasAssistantResponse: true,
     });
   });
 
   it('shouldSkipReview accurately determines when to skip without new user turns', () => {
     const testMarker = join(homedir(), '.mcp-memory', 'pending', 'test-marker.json');
 
-    // 1. Zero user messages -> always skip
-    expect(shouldSkipReview(null, 1000, { userMessageCount: 0, lastUserUuid: null })).toBe(true);
+    // 1. Zero user messages or no assistant response -> always skip
+    expect(shouldSkipReview(null, 1000, { userMessageCount: 0, lastUserUuid: null, hasAssistantResponse: false })).toBe(true);
+    expect(shouldSkipReview(null, 1000, { userMessageCount: 1, lastUserUuid: 'u-1', hasAssistantResponse: false })).toBe(true);
 
-    // 2. Non-existent marker -> do not skip
-    expect(shouldSkipReview('/non/existent/marker.json', 1000, { userMessageCount: 1, lastUserUuid: 'u-1' })).toBe(false);
+    // 2. Non-existent marker with valid conversation -> do not skip
+    expect(shouldSkipReview('/non/existent/marker.json', 1000, { userMessageCount: 1, lastUserUuid: 'u-1', hasAssistantResponse: true })).toBe(false);
 
     // 3. Marker with identical lastUserUuid -> skip!
     writeFileSync(testMarker, JSON.stringify({
@@ -134,10 +149,10 @@ describe('buildReviewerArgs', () => {
       userMessageCount: 2,
       lastUserUuid: 'u-2',
     }));
-    expect(shouldSkipReview(testMarker, 5200, { userMessageCount: 2, lastUserUuid: 'u-2' })).toBe(true);
+    expect(shouldSkipReview(testMarker, 5200, { userMessageCount: 2, lastUserUuid: 'u-2', hasAssistantResponse: true })).toBe(true);
 
     // 4. Marker with different lastUserUuid (new user turn) -> do not skip!
-    expect(shouldSkipReview(testMarker, 5500, { userMessageCount: 3, lastUserUuid: 'u-3' })).toBe(false);
+    expect(shouldSkipReview(testMarker, 5500, { userMessageCount: 3, lastUserUuid: 'u-3', hasAssistantResponse: true })).toBe(false);
 
     rmSync(testMarker, { force: true });
   });

@@ -31,15 +31,53 @@ const MAX_TRANSCRIPT_BYTES = 200_000;
 export interface UserInteractionInfo {
   userMessageCount: number;
   lastUserUuid: string | null;
+  hasAssistantResponse: boolean;
 }
+
+const UI_ONLY_COMMANDS = new Set([
+  'clear',
+  'exit',
+  'color',
+  'theme',
+  'statusline',
+  'terminal-setup',
+  'radio',
+  'cost',
+]);
 
 export function isMeaningfulUserContent(content: unknown): boolean {
   if (typeof content === 'string') {
     const trimmed = content.trim();
     if (!trimmed) return false;
     if (trimmed.includes('<local-command-caveat>')) return false;
-    if (trimmed.includes('<command-name>')) return false;
-    if (trimmed.startsWith('/') || trimmed === 'clear' || trimmed === 'exit') return false;
+
+    // Check if it is a slash command
+    if (trimmed.includes('<command-name>')) {
+      const nameMatch = trimmed.match(/<command-name>\/?(.*?)<\/command-name>/);
+      const cmdName = nameMatch ? nameMatch[1].trim().toLowerCase() : '';
+      const argsMatch = trimmed.match(/<command-args>([\s\S]*?)<\/command-args>/);
+      const cmdArgs = argsMatch ? argsMatch[1].trim() : '';
+
+      // If command has meaningful arguments/prompt, it is a real task
+      if (cmdArgs.length > 0) return true;
+
+      // Pure command without args: if it is in UI-only blacklist, it's not meaningful
+      if (UI_ONLY_COMMANDS.has(cmdName)) return false;
+
+      // Skill invocations without explicit args (like /init, /workflow-authoring)
+      return true;
+    }
+
+    // Bare text commands like "clear" or "exit"
+    const lower = trimmed.toLowerCase();
+    if (lower === 'clear' || lower === 'exit') return false;
+    if (lower.startsWith('/')) {
+      const bareCmd = lower.slice(1).split(/\s+/)[0];
+      const rest = lower.slice(1 + bareCmd.length).trim();
+      if (rest.length > 0) return true;
+      if (UI_ONLY_COMMANDS.has(bareCmd)) return false;
+    }
+
     return true;
   }
   if (Array.isArray(content)) {
@@ -57,9 +95,13 @@ export function isMeaningfulUserContent(content: unknown): boolean {
 export function extractUserInteraction(content: string): UserInteractionInfo {
   let userMessageCount = 0;
   let lastUserUuid: string | null = null;
+  let hasAssistantResponse = false;
   const lines = content.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (line.includes('"type":"assistant"') || line.includes('"role":"assistant"')) {
+      hasAssistantResponse = true;
+    }
     if (!line.includes('"type":"user"')) continue;
     try {
       const obj = JSON.parse(line);
@@ -76,11 +118,12 @@ export function extractUserInteraction(content: string): UserInteractionInfo {
       // ignore malformed lines
     }
   }
-  return { userMessageCount, lastUserUuid };
+  return { userMessageCount, lastUserUuid, hasAssistantResponse };
 }
 
 export function hasUserInteraction(content: string): boolean {
-  return extractUserInteraction(content).userMessageCount > 0;
+  const info = extractUserInteraction(content);
+  return info.userMessageCount > 0 && info.hasAssistantResponse;
 }
 
 export function shouldSkipReview(
@@ -89,8 +132,8 @@ export function shouldSkipReview(
   interaction: UserInteractionInfo,
   transcriptPath?: string,
 ): boolean {
-  // 1. If there are no user messages at all, always skip
-  if (interaction.userMessageCount === 0) {
+  // 1. If there are no meaningful user messages OR assistant never responded, skip
+  if (interaction.userMessageCount === 0 || !interaction.hasAssistantResponse) {
     return true;
   }
 
@@ -218,7 +261,7 @@ async function main(): Promise<void> {
   }
 
   const interaction = extractUserInteraction(transcript);
-  if (transcript.length < MIN_TRANSCRIPT_CHARS || interaction.userMessageCount === 0) {
+  if (transcript.length < MIN_TRANSCRIPT_CHARS || interaction.userMessageCount === 0 || !interaction.hasAssistantResponse) {
     cleanupPendingFile(sessionId);
     process.exit(0);
   }
