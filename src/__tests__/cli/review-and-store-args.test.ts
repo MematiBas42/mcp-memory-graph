@@ -16,7 +16,13 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { buildReviewerArgs, resolveServerEntry, cleanupPendingFile } from '../../cli/review-and-store.js';
+import {
+  buildReviewerArgs,
+  resolveServerEntry,
+  cleanupPendingFile,
+  extractUserInteraction,
+  shouldSkipReview,
+} from '../../cli/review-and-store.js';
 
 describe('buildReviewerArgs', () => {
   const entry = '/some/install/dist/index.js';
@@ -78,5 +84,50 @@ describe('buildReviewerArgs', () => {
 
     cleanupPendingFile(testSession);
     expect(existsSync(targetFile)).toBe(false);
+  });
+
+  it('extractUserInteraction correctly counts user messages and extracts lastUserUuid', () => {
+    const emptyJsonl = '{"type":"mode"}\n{"type":"cost-state"}\n';
+    expect(extractUserInteraction(emptyJsonl)).toEqual({
+      userMessageCount: 0,
+      lastUserUuid: null,
+    });
+
+    const activeJsonl = [
+      '{"type":"mode"}',
+      '{"type":"user","uuid":"u-1","message":{"content":"hello"}}',
+      '{"type":"assistant","message":{"content":"hi"}}',
+      '{"type":"user","uuid":"u-2","message":{"content":"how are you?"}}',
+      '{"type":"cost-state"}',
+    ].join('\n');
+
+    expect(extractUserInteraction(activeJsonl)).toEqual({
+      userMessageCount: 2,
+      lastUserUuid: 'u-2',
+    });
+  });
+
+  it('shouldSkipReview accurately determines when to skip without new user turns', () => {
+    const testMarker = join(homedir(), '.mcp-memory', 'pending', 'test-marker.json');
+
+    // 1. Zero user messages -> always skip
+    expect(shouldSkipReview(null, 1000, { userMessageCount: 0, lastUserUuid: null })).toBe(true);
+
+    // 2. Non-existent marker -> do not skip
+    expect(shouldSkipReview('/non/existent/marker.json', 1000, { userMessageCount: 1, lastUserUuid: 'u-1' })).toBe(false);
+
+    // 3. Marker with identical lastUserUuid -> skip!
+    writeFileSync(testMarker, JSON.stringify({
+      reviewedAt: new Date().toISOString(),
+      transcriptBytes: 5000,
+      userMessageCount: 2,
+      lastUserUuid: 'u-2',
+    }));
+    expect(shouldSkipReview(testMarker, 5200, { userMessageCount: 2, lastUserUuid: 'u-2' })).toBe(true);
+
+    // 4. Marker with different lastUserUuid (new user turn) -> do not skip!
+    expect(shouldSkipReview(testMarker, 5500, { userMessageCount: 3, lastUserUuid: 'u-3' })).toBe(false);
+
+    rmSync(testMarker, { force: true });
   });
 });

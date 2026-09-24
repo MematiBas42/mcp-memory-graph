@@ -28,8 +28,87 @@ Scope every write to "project" with a namespace derived from the repo/project. S
 const MIN_TRANSCRIPT_CHARS = 500;
 const MAX_TRANSCRIPT_BYTES = 200_000;
 
+export interface UserInteractionInfo {
+  userMessageCount: number;
+  lastUserUuid: string | null;
+}
+
+export function extractUserInteraction(content: string): UserInteractionInfo {
+  let userMessageCount = 0;
+  let lastUserUuid: string | null = null;
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.includes('"type":"user"')) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === 'user') {
+        userMessageCount++;
+        if (typeof obj.uuid === 'string' && obj.uuid.length > 0) {
+          lastUserUuid = obj.uuid;
+        }
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+  return { userMessageCount, lastUserUuid };
+}
+
 export function hasUserInteraction(content: string): boolean {
-  return content.includes('"type":"user"') || content.includes('"role":"user"');
+  return extractUserInteraction(content).userMessageCount > 0;
+}
+
+export function shouldSkipReview(
+  markerPath: string | null,
+  currentBytes: number,
+  interaction: UserInteractionInfo,
+  transcriptPath?: string,
+): boolean {
+  // 1. If there are no user messages at all, always skip
+  if (interaction.userMessageCount === 0) {
+    return true;
+  }
+
+  // 2. If no marker exists, cannot skip
+  if (!markerPath || !existsSync(markerPath)) {
+    return false;
+  }
+
+  try {
+    const raw = readFileSync(markerPath, 'utf-8').trim();
+    if (raw.startsWith('{')) {
+      const data = JSON.parse(raw);
+      // If marker recorded lastUserUuid, match means exact same conversation end
+      if (data.lastUserUuid && interaction.lastUserUuid) {
+        return data.lastUserUuid === interaction.lastUserUuid;
+      }
+      // If marker recorded userMessageCount
+      if (typeof data.userMessageCount === 'number') {
+        return interaction.userMessageCount <= data.userMessageCount;
+      }
+      // Backwards-compat for early JSON markers: if transcript did not grow by > 4KB,
+      // it was just Claude Code metadata appends (cost-state, mode, etc.)
+      if (typeof data.transcriptBytes === 'number') {
+        return currentBytes <= data.transcriptBytes + 4096;
+      }
+    } else {
+      // Legacy marker (pre-JSON timestamp): if marker exists, session was already reviewed.
+      // Skip unless transcript has substantially grown after marker.
+      const markerStat = statSync(markerPath);
+      if (transcriptPath && existsSync(transcriptPath)) {
+        const transcriptStat = statSync(transcriptPath);
+        if (transcriptStat.mtimeMs <= markerStat.mtimeMs + 5000) {
+          return true;
+        }
+      }
+      return true;
+    }
+  } catch {
+    return true;
+  }
+
+  return false;
 }
 const HARD_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -114,7 +193,8 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  if (transcript.length < MIN_TRANSCRIPT_CHARS || !hasUserInteraction(transcript)) {
+  const interaction = extractUserInteraction(transcript);
+  if (transcript.length < MIN_TRANSCRIPT_CHARS || interaction.userMessageCount === 0) {
     cleanupPendingFile(sessionId);
     process.exit(0);
   }
@@ -143,33 +223,11 @@ async function main(): Promise<void> {
   }
 
   // #2 re-run guard: don't double-review an unchanged session.
-  // If the session was resumed and transcript grew, allow reviewing new content.
+  // If the session was resumed and transcript grew with new user turns, allow reviewing new content.
   const currentTranscriptBytes = Buffer.byteLength(transcript);
-  if (markerPath && existsSync(markerPath)) {
-    let shouldSkip = false;
-    try {
-      const raw = readFileSync(markerPath, 'utf-8').trim();
-      if (raw.startsWith('{')) {
-        const data = JSON.parse(raw);
-        if (typeof data.transcriptBytes === 'number' && currentTranscriptBytes <= data.transcriptBytes) {
-          shouldSkip = true;
-        }
-      } else {
-        // Legacy ISO timestamp format: skip only if transcript wasn't modified after marker
-        const markerStat = statSync(markerPath);
-        const transcriptStat = statSync(transcriptPath);
-        if (transcriptStat.mtimeMs <= markerStat.mtimeMs) {
-          shouldSkip = true;
-        }
-      }
-    } catch {
-      shouldSkip = true;
-    }
-
-    if (shouldSkip) {
-      cleanupPendingFile(sessionId);
-      process.exit(0);
-    }
+  if (shouldSkipReview(markerPath, currentTranscriptBytes, interaction, transcriptPath)) {
+    cleanupPendingFile(sessionId);
+    process.exit(0);
   }
   const logLine = (msg: string): void => {
     try {
@@ -227,7 +285,7 @@ async function main(): Promise<void> {
       // Bildirim daemon'u yoksa sessizce devam et
     }
 
-    // Mark the session reviewed with byte count only on success so future resumes can detect growth.
+    // Mark the session reviewed with user turn identifiers so future resumes without user activity are skipped.
     if (code === 0 && markerPath) {
       try {
         writeFileSync(
@@ -235,6 +293,8 @@ async function main(): Promise<void> {
           JSON.stringify({
             reviewedAt: new Date().toISOString(),
             transcriptBytes: currentTranscriptBytes,
+            userMessageCount: interaction.userMessageCount,
+            lastUserUuid: interaction.lastUserUuid,
           })
         );
       } catch {

@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sanitizePath } from '../lib/path-validation.js';
+import { extractUserInteraction, shouldSkipReview } from '../cli/review-and-store.js';
 
 function isDebugLogEnabled(): boolean {
   try {
@@ -141,9 +142,23 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  const safeSessionId = sessionId || `${Date.now()}`;
+  const markerPath = sessionId ? join(homedir(), '.mcp-memory', 'logs', `reviewed-${safeSessionId}.marker`) : null;
+
+  // Fast skip guard: if transcript has no user messages or was already reviewed with identical user turns, skip without spawning
+  try {
+    const rawContent = readFileSync(transcriptPath, 'utf-8');
+    const interaction = extractUserInteraction(rawContent);
+    if (shouldSkipReview(markerPath, Buffer.byteLength(rawContent), interaction, transcriptPath)) {
+      logHook(`Skipped review for ${safeSessionId}: no new user messages since last review`);
+      process.exit(0);
+    }
+  } catch {
+    // If reading fails or unreadable, proceed to detached spawn
+  }
+
   // Register pending review job so shutdown guards hold the machine even if terminal/process is killed
   const pendingDir = join(homedir(), '.mcp-memory', 'pending');
-  const safeSessionId = sessionId || `${Date.now()}`;
   const cwdVal = (input?.cwd as string) || process.cwd();
 
   const writePending = (pid: number | null, attempts: number): void => {
