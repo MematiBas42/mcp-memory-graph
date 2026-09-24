@@ -38,8 +38,8 @@ export function isMeaningfulUserContent(content: unknown): boolean {
     const trimmed = content.trim();
     if (!trimmed) return false;
     if (trimmed.includes('<local-command-caveat>')) return false;
-    if (trimmed.includes('<command-name>/clear</command-name>') || trimmed.includes('<command-name>/exit</command-name>')) return false;
-    if (trimmed === '/clear' || trimmed === 'clear' || trimmed === '/exit' || trimmed === 'exit') return false;
+    if (trimmed.includes('<command-name>')) return false;
+    if (trimmed.startsWith('/') || trimmed === 'clear' || trimmed === 'exit') return false;
     return true;
   }
   if (Array.isArray(content)) {
