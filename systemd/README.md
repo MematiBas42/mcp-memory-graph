@@ -16,18 +16,19 @@ This directory contains systemd integration units and scripts providing two crit
           ▼                                               ▼
   [ User Level (systemd --user) ]               [ System Level (PID 1) ]
   mcp-memory-user-guard.service                 mcp-memory-shutdown-guard.service
-  ├── Before: exit.target, shutdown.target      ├── Before: poweroff.target, sleep.target
-  └── After: cliproxyapi, token-proxy           └── After: NetworkManager, network.target
-          │                                               │
-          ▼                                               ▼
-  Holds user session & prevents killing         Holds system poweroff & prevents killing
-  local LLM proxy daemons                       Wi-Fi, Ethernet, DNS, and network stack
-          │                                               │
+  ├── Before: exit.target, shutdown.target      ├── Before & Conflicts: shutdown.target
+  ├── Conflicts: exit.target, shutdown.target   ├── After: NetworkManager, network.target
+  └── After: cliproxyapi, token-proxy           │
+          │                                     mcp-memory-sleep-guard.service
+          ▼                                     └── Before: sleep.target (Wants by sleep)
+  Holds user session & prevents killing         
+  local LLM proxy daemons                       Holds system poweroff & prevents killing
+          │                                     Wi-Fi, Ethernet, DNS, and network stack
           └───────────────────────┬───────────────────────┘
                                   ▼
                Checks Pending Queue (`~/.mcp-memory/pending/`)
                Waits for active reviews OR executes fallback
-               directly inside ExecStop (typically 5-10s, max 300s)
+               directly inside ExecStop (typically 5-10s, max 120s)
                                   │
                                   ▼
                   Review Completes & Clears Queue
@@ -43,7 +44,8 @@ This directory contains systemd integration units and scripts providing two crit
 ```text
 systemd/
 ├── system/
-│   ├── mcp-memory-shutdown-guard.service   # System-level poweroff/reboot/sleep guard
+│   ├── mcp-memory-shutdown-guard.service   # System-level poweroff/reboot guard
+│   ├── mcp-memory-sleep-guard.service      # System-level sleep/suspend guard
 │   └── mcp-memory-shutdown-guard.sh        # System guard monitor script
 ├── user/
 │   ├── mcp-memory-user-guard.service       # User-level session exit guard

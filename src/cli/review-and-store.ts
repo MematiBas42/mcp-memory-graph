@@ -5,7 +5,7 @@
 // and (when warranted) one synthesized reflection. Replaces the broken
 // agent-type Stop hook path.
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, unlinkSync, realpathSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, unlinkSync, statSync, realpathSync } from 'node:fs';
 import { execSync, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -138,10 +138,34 @@ async function main(): Promise<void> {
     // best-effort; never block the review on a logdir failure
   }
 
-  // #2 re-run guard: this session was already reviewed → don't double-write.
+  // #2 re-run guard: don't double-review an unchanged session.
+  // If the session was resumed and transcript grew, allow reviewing new content.
+  const currentTranscriptBytes = Buffer.byteLength(transcript);
   if (markerPath && existsSync(markerPath)) {
-    cleanupPendingFile(sessionId);
-    process.exit(0);
+    let shouldSkip = false;
+    try {
+      const raw = readFileSync(markerPath, 'utf-8').trim();
+      if (raw.startsWith('{')) {
+        const data = JSON.parse(raw);
+        if (typeof data.transcriptBytes === 'number' && currentTranscriptBytes <= data.transcriptBytes) {
+          shouldSkip = true;
+        }
+      } else {
+        // Legacy ISO timestamp format: skip only if transcript wasn't modified after marker
+        const markerStat = statSync(markerPath);
+        const transcriptStat = statSync(transcriptPath);
+        if (transcriptStat.mtimeMs <= markerStat.mtimeMs) {
+          shouldSkip = true;
+        }
+      }
+    } catch {
+      shouldSkip = true;
+    }
+
+    if (shouldSkip) {
+      cleanupPendingFile(sessionId);
+      process.exit(0);
+    }
   }
   const logLine = (msg: string): void => {
     try {
@@ -197,10 +221,16 @@ async function main(): Promise<void> {
       // Bildirim daemon'u yoksa sessizce devam et
     }
 
-    // Mark the session reviewed so a re-fired Stop hook skips it.
+    // Mark the session reviewed with byte count so future resumes can detect growth.
     if (markerPath) {
       try {
-        writeFileSync(markerPath, new Date().toISOString());
+        writeFileSync(
+          markerPath,
+          JSON.stringify({
+            reviewedAt: new Date().toISOString(),
+            transcriptBytes: currentTranscriptBytes,
+          })
+        );
       } catch {
         // best-effort
       }

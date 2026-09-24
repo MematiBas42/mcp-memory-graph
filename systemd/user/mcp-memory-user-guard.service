@@ -3,6 +3,7 @@ Description=Wait for MCP Memory Review before User Session Exits
 DefaultDependencies=no
 After=cliproxyapi.service claude-token-proxy.service
 Before=shutdown.target exit.target
+Conflicts=shutdown.target exit.target
 
 [Service]
 Type=oneshot

@@ -1,0 +1,12 @@
+[Unit]
+Description=Wait for MCP Memory Review before Sleep or Suspend
+DefaultDependencies=no
+Before=sleep.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mcp-memory-shutdown-guard.sh nitro
+TimeoutSec=130
+
+[Install]
+WantedBy=sleep.target

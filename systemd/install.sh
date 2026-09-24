@@ -30,7 +30,7 @@ install_user_units() {
 }
 
 install_system_units() {
-  echo "==> Installing system-level shutdown guard (requires root/pkexec)..."
+  echo "==> Installing system-level shutdown and sleep guards (requires root/pkexec)..."
   local priv="sudo"
   local current_user="${USER:-nitro}"
   if ! command -v sudo >/dev/null 2>&1 && command -v pkexec >/dev/null 2>&1; then
@@ -41,10 +41,12 @@ install_system_units() {
     cp '$SCRIPT_DIR/system/mcp-memory-shutdown-guard.sh' /usr/local/bin/mcp-memory-shutdown-guard.sh
     chmod +x /usr/local/bin/mcp-memory-shutdown-guard.sh
     sed 's/nitro/$current_user/g' '$SCRIPT_DIR/system/mcp-memory-shutdown-guard.service' > /etc/systemd/system/mcp-memory-shutdown-guard.service
+    sed 's/nitro/$current_user/g' '$SCRIPT_DIR/system/mcp-memory-sleep-guard.service' > /etc/systemd/system/mcp-memory-sleep-guard.service
     systemctl daemon-reload
     systemctl enable --now mcp-memory-shutdown-guard.service
+    systemctl enable mcp-memory-sleep-guard.service
   "
-  echo "✔ System-level shutdown guard installed and enabled."
+  echo "✔ System-level shutdown and sleep guards installed and enabled."
 }
 
 uninstall_all() {
@@ -65,7 +67,9 @@ uninstall_all() {
   if command -v "$priv" >/dev/null 2>&1; then
     $priv bash -c "
       systemctl disable --now mcp-memory-shutdown-guard.service 2>/dev/null || true
+      systemctl disable --now mcp-memory-sleep-guard.service 2>/dev/null || true
       rm -f /etc/systemd/system/mcp-memory-shutdown-guard.service \
+            /etc/systemd/system/mcp-memory-sleep-guard.service \
             /usr/local/bin/mcp-memory-shutdown-guard.sh
       systemctl daemon-reload
     "
