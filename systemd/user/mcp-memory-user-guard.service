@@ -10,7 +10,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/true
 ExecStop=%h/.local/bin/mcp-memory-user-guard.sh
-TimeoutStopSec=130
+TimeoutStopSec=310
 
 [Install]
 WantedBy=default.target

@@ -6,7 +6,7 @@ Before=sleep.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/mcp-memory-shutdown-guard.sh nitro
-TimeoutSec=130
+TimeoutSec=310
 
 [Install]
 WantedBy=sleep.target

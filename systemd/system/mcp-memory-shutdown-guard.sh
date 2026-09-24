@@ -2,7 +2,7 @@
 # MCP Memory Shutdown & Sleep Guard (System-level)
 # Waits for any pending reviews or active review units before system powers off, reboots, or sleeps.
 
-MAX_WAIT=120
+MAX_WAIT=300
 WAITED=0
 TARGET_USER="${1:-nitro}"
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
@@ -26,8 +26,8 @@ while [ $WAITED -lt $MAX_WAIT ]; do
   fi
 
   if [ $WAITED -eq 0 ]; then
-    (echo "MCP Memory: Session review pending for ${TARGET_USER}. Holding shutdown/sleep (max 2m)..." > /dev/kmsg) 2>/dev/null || true
-    echo "MCP Memory: Session review pending for ${TARGET_USER}. Holding shutdown/sleep (max 2m)..."
+    (echo "MCP Memory: Session review pending for ${TARGET_USER}. Holding shutdown/sleep (max 5m)..." > /dev/kmsg) 2>/dev/null || true
+    echo "MCP Memory: Session review pending for ${TARGET_USER}. Holding shutdown/sleep (max 5m)..."
   fi
 
   sleep 1
@@ -35,6 +35,6 @@ while [ $WAITED -lt $MAX_WAIT ]; do
 done
 
 if [ $WAITED -ge $MAX_WAIT ]; then
-  (echo "MCP Memory: Reached 2-minute timeout. Proceeding with shutdown/sleep." > /dev/kmsg) 2>/dev/null || true
+  (echo "MCP Memory: Reached 5-minute timeout. Proceeding with shutdown/sleep." > /dev/kmsg) 2>/dev/null || true
 fi
 exit 0

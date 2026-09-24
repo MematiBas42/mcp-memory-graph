@@ -28,7 +28,7 @@ This directory contains systemd integration units and scripts providing two crit
                                   ▼
                Checks Pending Queue (`~/.mcp-memory/pending/`)
                Waits for active reviews OR executes fallback
-               directly inside ExecStop (typically 5-10s, max 120s)
+               directly inside ExecStop (typically 10-65s, max 300s)
                                   │
                                   ▼
                   Review Completes & Clears Queue

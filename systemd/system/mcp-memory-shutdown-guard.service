@@ -10,7 +10,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/true
 ExecStop=/usr/local/bin/mcp-memory-shutdown-guard.sh nitro
-TimeoutStopSec=130
+TimeoutStopSec=310
 
 [Install]
 WantedBy=multi-user.target

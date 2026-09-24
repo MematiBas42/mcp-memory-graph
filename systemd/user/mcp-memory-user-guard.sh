@@ -14,7 +14,7 @@ if [ -d "$PENDING_DIR" ]; then
   find "$PENDING_DIR" -name "*.json" -mmin +30 -delete 2>/dev/null || true
 fi
 
-MAX_WAIT=120
+MAX_WAIT=300
 WAITED=0
 
 # 2. Check for active units (backwards-compat)
@@ -43,7 +43,7 @@ if [ -d "$PENDING_DIR" ]; then
       continue
     fi
 
-    echo "MCP Memory (User Guard): Session review pending for ${SESSION_ID}. Holding shutdown..." >&2
+    echo "MCP Memory (User Guard): Session review pending for ${SESSION_ID}. Holding shutdown (max 5m)..." >&2
 
     # Wait if background review process is currently running
     while is_running "$PID"; do
