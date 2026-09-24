@@ -27,6 +27,10 @@ Scope every write to "project" with a namespace derived from the repo/project. S
 
 const MIN_TRANSCRIPT_CHARS = 500;
 const MAX_TRANSCRIPT_BYTES = 200_000;
+
+export function hasUserInteraction(content: string): boolean {
+  return content.includes('"type":"user"') || content.includes('"role":"user"');
+}
 const HARD_TIMEOUT_MS = 5 * 60 * 1000;
 
 // The only tools the reviewer is ever allowed to call.
@@ -110,7 +114,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  if (transcript.length < MIN_TRANSCRIPT_CHARS) {
+  if (transcript.length < MIN_TRANSCRIPT_CHARS || !hasUserInteraction(transcript)) {
     cleanupPendingFile(sessionId);
     process.exit(0);
   }
@@ -209,13 +213,14 @@ async function main(): Promise<void> {
   const finish = (code: number): void => {
     logLine(`review end (exit=${code})`);
 
-    // Sistem bildirimi (Arch Linux & macOS uyumlu)
+    // Sistem bildirimi (Arch Linux & macOS uyumlu) — yalnızca başarılı tamamlanmada gösterilir
     try {
-      const msg = code === 0 ? 'Oturum sonu hafıza analizi tamamlandı.' : `Oturum sonu analizi hata ile bitti (kod: ${code})`;
-      if (process.platform === 'linux') {
-        execSync(`notify-send "Claude Code" "${msg}" -a "MCP Memory" -i "$HOME/.mcp-memory/claude-icon.svg"`);
-      } else if (process.platform === 'darwin') {
-        execSync(`osascript -e 'display notification "${msg}" with title "Claude Code"'`);
+      if (code === 0) {
+        if (process.platform === 'linux') {
+          execSync(`notify-send "Claude Code" "Oturum sonu hafıza analizi tamamlandı." -a "MCP Memory" -i "$HOME/.mcp-memory/claude-icon.svg"`);
+        } else if (process.platform === 'darwin') {
+          execSync(`osascript -e 'display notification "Oturum sonu hafıza analizi tamamlandı." with title "Claude Code"'`);
+        }
       }
     } catch {
       // Bildirim daemon'u yoksa sessizce devam et

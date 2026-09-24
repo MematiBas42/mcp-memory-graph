@@ -14,14 +14,31 @@ if [ -d "$PENDING_DIR" ]; then
   find "$PENDING_DIR" -name "*.json" -mmin +30 -delete 2>/dev/null || true
 fi
 
+is_running() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -zq "review-and-store" "/proc/$pid/cmdline" 2>/dev/null
+}
+
 while [ $WAITED -lt $MAX_WAIT ]; do
-  HAS_PENDING=""
+  HAS_LIVE_JOB=0
   if [ -d "$PENDING_DIR" ]; then
-    HAS_PENDING=$(ls "$PENDING_DIR"/*.json 2>/dev/null | head -n 1 || true)
+    for job_file in "$PENDING_DIR"/*.json; do
+      [ -f "$job_file" ] || continue
+      pid=$(jq -r '.pid // empty' "$job_file" 2>/dev/null || true)
+      attempts=$(jq -r '.attempts // 0' "$job_file" 2>/dev/null || echo 0)
+
+      if is_running "$pid"; then
+        HAS_LIVE_JOB=1
+      elif [ "${attempts:-0}" -ge 1 ]; then
+        # Process has finished or died; remove stale job file
+        rm -f "$job_file"
+      fi
+    done
   fi
+
   ACTIVE=$(systemctl --machine="${TARGET_USER}@.host" --user list-units --state=active "mcp-memory-review-*" --no-legend 2>/dev/null | grep -E "mcp-memory-review" || true)
 
-  if [ -z "$HAS_PENDING" ] && [ -z "$ACTIVE" ]; then
+  if [ "$HAS_LIVE_JOB" -eq 0 ] && [ -z "$ACTIVE" ]; then
     break
   fi
 
