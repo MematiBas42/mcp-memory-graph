@@ -40,6 +40,17 @@ export interface PendingJobData {
   attempts: number;
 }
 
+export function migrateToBackgroundCgroup(pid: number): void {
+  try {
+    const uid = process.getuid ? process.getuid() : 1000;
+    const cgroupDir = `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/mcp-memory-bg`;
+    mkdirSync(cgroupDir, { recursive: true });
+    writeFileSync(join(cgroupDir, 'cgroup.procs'), String(pid));
+  } catch {
+    // Best-effort: ignore if cgroups v2 or permissions are unavailable
+  }
+}
+
 export function writePendingJob(
   pendingDir: string,
   safeSessionId: string,
@@ -151,6 +162,9 @@ async function main(): Promise<void> {
       env: { ...process.env, MCP_MEMORY_CWD: cwdVal },
     });
     const childPid = typeof child.pid === 'number' ? child.pid : null;
+    if (childPid) {
+      migrateToBackgroundCgroup(childPid);
+    }
     writePending(childPid, 1);
     child.unref();
     logHook(`Spawned detached reviewer pid=${childPid} for session=${safeSessionId}`);

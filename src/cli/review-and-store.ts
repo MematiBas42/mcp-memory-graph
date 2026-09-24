@@ -213,14 +213,15 @@ async function main(): Promise<void> {
   const finish = (code: number): void => {
     logLine(`review end (exit=${code})`);
 
-    // Sistem bildirimi (Arch Linux & macOS uyumlu) — yalnızca başarılı tamamlanmada gösterilir
+    // Sistem bildirimi (Arch Linux & macOS uyumlu)
     try {
-      if (code === 0) {
-        if (process.platform === 'linux') {
-          execSync(`notify-send "Claude Code" "Oturum sonu hafıza analizi tamamlandı." -a "MCP Memory" -i "$HOME/.mcp-memory/claude-icon.svg"`);
-        } else if (process.platform === 'darwin') {
-          execSync(`osascript -e 'display notification "Oturum sonu hafıza analizi tamamlandı." with title "Claude Code"'`);
-        }
+      const msg = code === 0
+        ? 'Oturum sonu hafıza analizi tamamlandı.'
+        : `Oturum sonu hafıza analizi tamamlanamadı (kod: ${code}). Günlük: ~/.mcp-memory/logs/`;
+      if (process.platform === 'linux') {
+        execSync(`notify-send "Claude Code" "${msg}" -a "MCP Memory" -i "$HOME/.mcp-memory/claude-icon.svg"`);
+      } else if (process.platform === 'darwin') {
+        execSync(`osascript -e 'display notification "${msg}" with title "Claude Code"'`);
       }
     } catch {
       // Bildirim daemon'u yoksa sessizce devam et
@@ -273,6 +274,16 @@ const isMain = (() => {
   }
 })();
 if (isMain) {
+  process.on('SIGTERM', () => {
+    cleanupPendingFile();
+    process.exit(143);
+  });
+
+  process.on('SIGINT', () => {
+    cleanupPendingFile();
+    process.exit(130);
+  });
+
   process.on('uncaughtException', (err) => {
     try {
       console.error('Uncaught exception in review-and-store:', err);
