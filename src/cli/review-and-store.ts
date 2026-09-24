@@ -227,8 +227,8 @@ async function main(): Promise<void> {
       // Bildirim daemon'u yoksa sessizce devam et
     }
 
-    // Mark the session reviewed with byte count so future resumes can detect growth.
-    if (markerPath) {
+    // Mark the session reviewed with byte count only on success so future resumes can detect growth.
+    if (code === 0 && markerPath) {
       try {
         writeFileSync(
           markerPath,
