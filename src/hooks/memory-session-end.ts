@@ -149,7 +149,7 @@ async function main(): Promise<void> {
   try {
     const rawContent = readFileSync(transcriptPath, 'utf-8');
     const interaction = extractUserInteraction(rawContent);
-    if (shouldSkipReview(markerPath, Buffer.byteLength(rawContent), interaction, transcriptPath)) {
+    if (shouldSkipReview(markerPath, Buffer.byteLength(rawContent), interaction, transcriptPath, rawContent)) {
       logHook(`Skipped review for ${safeSessionId}: no new user messages since last review`);
       process.exit(0);
     }

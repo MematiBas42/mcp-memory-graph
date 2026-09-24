@@ -37,6 +37,7 @@ export interface UserInteractionInfo {
 const UI_ONLY_COMMANDS = new Set([
   'clear',
   'exit',
+  'resume',
   'color',
   'theme',
   'statusline',
@@ -50,6 +51,7 @@ export function isMeaningfulUserContent(content: unknown): boolean {
     const trimmed = content.trim();
     if (!trimmed) return false;
     if (trimmed.includes('<local-command-caveat>')) return false;
+    if (trimmed.includes('Resume cancelled')) return false;
 
     // Check if it is a slash command
     if (trimmed.includes('<command-name>')) {
@@ -68,9 +70,9 @@ export function isMeaningfulUserContent(content: unknown): boolean {
       return true;
     }
 
-    // Bare text commands like "clear" or "exit"
+    // Bare text commands like "clear", "exit", "resume"
     const lower = trimmed.toLowerCase();
-    if (lower === 'clear' || lower === 'exit') return false;
+    if (lower === 'clear' || lower === 'exit' || lower === 'resume') return false;
     if (lower.startsWith('/')) {
       const bareCmd = lower.slice(1).split(/\s+/)[0];
       const rest = lower.slice(1 + bareCmd.length).trim();
@@ -90,6 +92,12 @@ export function isMeaningfulUserContent(content: unknown): boolean {
     });
   }
   return false;
+}
+
+export function hasResumeCancelledEnding(content: string): boolean {
+  // Check the tail of the transcript (last ~3000 bytes) for an aborted resume
+  const tail = content.length > 3000 ? content.slice(-3000) : content;
+  return tail.includes('Resume cancelled');
 }
 
 export function extractUserInteraction(content: string): UserInteractionInfo {
@@ -131,9 +139,15 @@ export function shouldSkipReview(
   currentBytes: number,
   interaction: UserInteractionInfo,
   transcriptPath?: string,
+  rawContent?: string,
 ): boolean {
   // 1. If there are no meaningful user messages OR assistant never responded, skip
   if (interaction.userMessageCount === 0 || !interaction.hasAssistantResponse) {
+    return true;
+  }
+
+  // 2. If the last action was an aborted resume ("Resume cancelled"), skip review
+  if (rawContent && hasResumeCancelledEnding(rawContent)) {
     return true;
   }
 
@@ -292,7 +306,7 @@ async function main(): Promise<void> {
   // #2 re-run guard: don't double-review an unchanged session.
   // If the session was resumed and transcript grew with new user turns, allow reviewing new content.
   const currentTranscriptBytes = Buffer.byteLength(transcript);
-  if (shouldSkipReview(markerPath, currentTranscriptBytes, interaction, transcriptPath)) {
+  if (shouldSkipReview(markerPath, currentTranscriptBytes, interaction, transcriptPath, transcript)) {
     cleanupPendingFile(sessionId);
     process.exit(0);
   }

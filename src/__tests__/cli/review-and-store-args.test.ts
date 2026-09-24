@@ -154,6 +154,10 @@ describe('buildReviewerArgs', () => {
     // 4. Marker with different lastUserUuid (new user turn) -> do not skip!
     expect(shouldSkipReview(testMarker, 5500, { userMessageCount: 3, lastUserUuid: 'u-3', hasAssistantResponse: true })).toBe(false);
 
+    // 5. Resume cancelled ending -> always skip review even if marker is missing
+    const resumeCancelledTranscript = '{"type":"user","uuid":"u-1"}\n{"type":"assistant"}\n<local-command-stdout>Resume cancelled</local-command-stdout>';
+    expect(shouldSkipReview(null, 1000, { userMessageCount: 1, lastUserUuid: 'u-1', hasAssistantResponse: true }, undefined, resumeCancelledTranscript)).toBe(true);
+
     rmSync(testMarker, { force: true });
   });
 });
