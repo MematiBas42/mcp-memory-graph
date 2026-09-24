@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveTranscriptPath, writePendingJob } from '../../hooks/memory-session-end.js';
+import { resolveTranscriptPath, writePendingJob, isPidAlive, isSessionReviewInProgress } from '../../hooks/memory-session-end.js';
 import { readFileSync } from 'node:fs';
 
 let tmpRoot: string;
@@ -86,5 +86,34 @@ describe('resolveTranscriptPath for memory-session-end', () => {
     const contentFail = JSON.parse(readFileSync(filePathFail, 'utf-8'));
     expect(contentFail.pid).toBeNull();
     expect(contentFail.attempts).toBe(0);
+  });
+
+  it('isPidAlive correctly identifies active vs inactive pids', () => {
+    expect(isPidAlive(process.pid)).toBe(true);
+    expect(isPidAlive(null)).toBe(false);
+    expect(isPidAlive(undefined)).toBe(false);
+    expect(isPidAlive(-1)).toBe(false);
+    expect(isPidAlive(0)).toBe(false);
+    // Usually an unlikely high pid is not alive
+    expect(isPidAlive(3999999)).toBe(false);
+  });
+
+  it('isSessionReviewInProgress guards against concurrent reviews', () => {
+    const pendingDir = join(tmpRoot, 'pending-mutex');
+    const sessionId = 'mutex-session-123';
+    const transcript = join(allowed, 'session-abc.jsonl');
+    const cwd = '/test/cwd';
+
+    // 1. No file -> not in progress
+    expect(isSessionReviewInProgress(pendingDir, sessionId)).toBe(false);
+
+    // 2. Active process pid -> in progress!
+    writePendingJob(pendingDir, sessionId, transcript, cwd, process.pid, 1);
+    expect(isSessionReviewInProgress(pendingDir, sessionId)).toBe(true);
+
+    // 3. Dead pid -> cleans up file and returns false
+    writePendingJob(pendingDir, sessionId, transcript, cwd, 3999999, 1);
+    expect(isSessionReviewInProgress(pendingDir, sessionId)).toBe(false);
+    expect(isSessionReviewInProgress(pendingDir, sessionId)).toBe(false);
   });
 });

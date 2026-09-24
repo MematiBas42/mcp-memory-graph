@@ -2,7 +2,7 @@
 // Claude Code SessionEnd hook — review session via headless `claude -p` on session exit (/exit or Ctrl+D)
 // and let Claude store key findings. Triggers only once at true session end.
 
-import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync, unlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -49,6 +49,36 @@ export function migrateToBackgroundCgroup(pid: number): void {
     writeFileSync(join(cgroupDir, 'cgroup.procs'), String(pid));
   } catch {
     // Best-effort: ignore if cgroups v2 or permissions are unavailable
+  }
+}
+
+export function isPidAlive(pid: number | null | undefined): boolean {
+  if (typeof pid !== 'number' || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isSessionReviewInProgress(pendingDir: string, safeSessionId: string): boolean {
+  try {
+    const pendingFile = join(pendingDir, `${safeSessionId}.json`);
+    if (!existsSync(pendingFile)) return false;
+    const content = JSON.parse(readFileSync(pendingFile, 'utf-8'));
+    if (isPidAlive(content.pid)) {
+      return true;
+    }
+    // Process is no longer running; clean up stale pending file
+    try {
+      unlinkSync(pendingFile);
+    } catch {
+      // best-effort
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 
@@ -145,6 +175,13 @@ async function main(): Promise<void> {
   const safeSessionId = sessionId || `${Date.now()}`;
   const markerPath = sessionId ? join(homedir(), '.mcp-memory', 'logs', `reviewed-${safeSessionId}.marker`) : null;
 
+  // In-flight concurrency guard: if a review is already running for this exact session, don't spawn duplicate
+  const pendingDir = join(homedir(), '.mcp-memory', 'pending');
+  if (isSessionReviewInProgress(pendingDir, safeSessionId)) {
+    logHook(`Skipped review for ${safeSessionId}: review is already running in background`);
+    process.exit(0);
+  }
+
   // Fast skip guard: if transcript has no user messages or was already reviewed with identical user turns, skip without spawning
   try {
     const rawContent = readFileSync(transcriptPath, 'utf-8');
@@ -158,7 +195,6 @@ async function main(): Promise<void> {
   }
 
   // Register pending review job so shutdown guards hold the machine even if terminal/process is killed
-  const pendingDir = join(homedir(), '.mcp-memory', 'pending');
   const cwdVal = (input?.cwd as string) || process.cwd();
 
   const writePending = (pid: number | null, attempts: number): void => {
