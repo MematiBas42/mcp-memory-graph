@@ -7,7 +7,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveTranscriptPath, writePendingJob, isPidAlive, isSessionReviewInProgress } from '../../hooks/memory-session-end.js';
+import {
+  resolveTranscriptPath,
+  writePendingJob,
+  isPidAlive,
+  isSessionReviewInProgress,
+  shouldSkipSessionEndReason,
+} from '../../hooks/memory-session-end.js';
 import { readFileSync } from 'node:fs';
 
 let tmpRoot: string;
@@ -115,5 +121,12 @@ describe('resolveTranscriptPath for memory-session-end', () => {
     writePendingJob(pendingDir, sessionId, transcript, cwd, 3999999, 1);
     expect(isSessionReviewInProgress(pendingDir, sessionId)).toBe(false);
     expect(isSessionReviewInProgress(pendingDir, sessionId)).toBe(false);
+  });
+
+  it('shouldSkipSessionEndReason correctly filters clear command reason', () => {
+    expect(shouldSkipSessionEndReason('clear')).toBe(true);
+    expect(shouldSkipSessionEndReason('exit')).toBe(false);
+    expect(shouldSkipSessionEndReason('other')).toBe(false);
+    expect(shouldSkipSessionEndReason('unknown')).toBe(false);
   });
 });

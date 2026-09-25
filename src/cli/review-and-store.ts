@@ -100,6 +100,12 @@ export function hasResumeCancelledEnding(content: string): boolean {
   return tail.includes('Resume cancelled');
 }
 
+export function hasClearCommandEnding(content: string): boolean {
+  // Check the tail of the transcript (last ~3000 bytes) for a trailing clear command
+  const tail = content.length > 3000 ? content.slice(-3000) : content;
+  return tail.includes('<command-name>/clear</command-name>') || tail.includes('<command-message>clear</command-message>');
+}
+
 export function extractUserInteraction(content: string): UserInteractionInfo {
   let userMessageCount = 0;
   let lastUserUuid: string | null = null;
@@ -146,8 +152,8 @@ export function shouldSkipReview(
     return true;
   }
 
-  // 2. If the last action was an aborted resume ("Resume cancelled"), skip review
-  if (rawContent && hasResumeCancelledEnding(rawContent)) {
+  // 2. If the last action was an aborted resume ("Resume cancelled") or clear command, skip review
+  if (rawContent && (hasResumeCancelledEnding(rawContent) || hasClearCommandEnding(rawContent))) {
     return true;
   }
 

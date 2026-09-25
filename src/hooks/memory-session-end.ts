@@ -82,6 +82,10 @@ export function isSessionReviewInProgress(pendingDir: string, safeSessionId: str
   }
 }
 
+export function shouldSkipSessionEndReason(reason: string): boolean {
+  return reason === 'clear';
+}
+
 export function writePendingJob(
   pendingDir: string,
   safeSessionId: string,
@@ -147,6 +151,11 @@ async function main(): Promise<void> {
   const sessionId = typeof input?.session_id === 'string' ? input.session_id : '';
   const reason = typeof input?.reason === 'string' ? input.reason : 'unknown';
   logHook(`Fired for session=${sessionId} reason=${reason}`);
+
+  if (shouldSkipSessionEndReason(reason)) {
+    logHook(`Skipped review for ${sessionId}: session ended due to reason=${reason}`);
+    process.exit(0);
+  }
 
   const configPath = process.env.MCP_MEMORY_CONFIG_PATH || join(homedir(), '.mcp-memory', 'config.json');
   try {

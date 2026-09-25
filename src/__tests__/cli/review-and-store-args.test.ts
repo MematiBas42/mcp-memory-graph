@@ -160,6 +160,10 @@ describe('buildReviewerArgs', () => {
     const resumeCancelledTranscript = '{"type":"user","uuid":"u-1"}\n{"type":"assistant"}\n<local-command-stdout>Resume cancelled</local-command-stdout>';
     expect(shouldSkipReview(null, 1000, { userMessageCount: 1, lastUserUuid: 'u-1', hasAssistantResponse: true }, undefined, resumeCancelledTranscript)).toBe(true);
 
+    // 6. Clear command ending -> always skip review even if marker is missing
+    const clearCommandTranscript = '{"type":"user","uuid":"u-1"}\n{"type":"assistant"}\n<command-name>/clear</command-name>\n<command-message>clear</command-message>';
+    expect(shouldSkipReview(null, 1000, { userMessageCount: 1, lastUserUuid: 'u-1', hasAssistantResponse: true }, undefined, clearCommandTranscript)).toBe(true);
+
     rmSync(testMarker, { force: true });
   });
 });
