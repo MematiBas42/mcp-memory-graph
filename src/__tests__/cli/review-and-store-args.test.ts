@@ -61,9 +61,11 @@ describe('buildReviewerArgs', () => {
     ]);
   });
 
-  it('runs headless with text output', () => {
+  it('runs headless with text output and no session persistence', () => {
     const { args } = buildReviewerArgs(entry);
     expect(args[0]).toBe('-p');
+    expect(args).toContain('--no-session-persistence');
+    expect(args).toContain('--bare');
     expect(args).toContain('--output-format');
     expect(args[args.indexOf('--output-format') + 1]).toBe('text');
   });

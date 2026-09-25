@@ -230,6 +230,8 @@ export function buildReviewerArgs(
   });
   const args = [
     '-p',
+    '--no-session-persistence',
+    '--bare',
     '--model',
     'sonnet',
     '--strict-mcp-config',
